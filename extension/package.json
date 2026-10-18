@@ -1,0 +1,113 @@
+{
+  "name": "cp2",
+  "displayName": "cp2 — Competitive Programming Helper 2",
+  "description": "Test cases without the clicking: implicit problems, text-file cases, stress testing, one-key sample import and submit for Codeforces / AtCoder. Reads your existing .cph data.",
+  "publisher": "caterpillow",
+  "version": "0.1.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Testing",
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cp2",
+          "title": "cp2",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cp2": [
+        {
+          "type": "webview",
+          "id": "cp2.view",
+          "name": "Tests"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "cp2.runAll", "title": "Run All Test Cases", "category": "cp2", "icon": "$(play)" },
+      { "command": "cp2.import", "title": "Import Samples", "category": "cp2", "icon": "$(cloud-download)" },
+      { "command": "cp2.submit", "title": "Submit", "category": "cp2", "icon": "$(cloud-upload)" },
+      { "command": "cp2.addCase", "title": "Add Test Case", "category": "cp2" },
+      { "command": "cp2.stop", "title": "Stop Running", "category": "cp2" },
+      { "command": "cp2.stressSetupWA", "title": "Set Up WA Stress", "category": "cp2" },
+      { "command": "cp2.stressSetupRE", "title": "Set Up RE Stress", "category": "cp2" },
+      { "command": "cp2.runWAStress", "title": "Run WA Stress", "category": "cp2" },
+      { "command": "cp2.runREStress", "title": "Run RE Stress", "category": "cp2" },
+      { "command": "cp2.writeContest", "title": "Write Contest…", "category": "cp2" },
+      { "command": "cp2.writeContestHere", "title": "cp2: Write Contest Here" },
+      { "command": "cp2.clearBuildCache", "title": "Clear Build Cache", "category": "cp2" },
+      { "command": "cp2.showLog", "title": "Show Log", "category": "cp2" }
+    ],
+    "keybindings": [
+      { "key": "ctrl+shift+r", "mac": "cmd+shift+r", "command": "cp2.runAll" },
+      { "key": "ctrl+shift+i", "mac": "cmd+shift+i", "command": "cp2.import" }
+    ],
+    "menus": {
+      "explorer/context": [
+        { "command": "cp2.writeContestHere", "when": "explorerResourceIsFolder && cp2.contestLoaded", "group": "cp2@1" }
+      ],
+      "commandPalette": [
+        { "command": "cp2.writeContestHere", "when": "false" }
+      ]
+    },
+    "colors": [
+      { "id": "cp2.verdict.accepted", "description": "Explorer colour for accepted problems", "defaults": { "dark": "#3fb950", "light": "#1a7f37", "highContrast": "#3fb950", "highContrastLight": "#1a7f37" } },
+      { "id": "cp2.verdict.rejected", "description": "Explorer colour for rejected problems", "defaults": { "dark": "#f85149", "light": "#cf222e", "highContrast": "#f85149", "highContrastLight": "#cf222e" } },
+      { "id": "cp2.verdict.partial", "description": "Explorer colour for partially accepted problems", "defaults": { "dark": "#d29922", "light": "#9a6700", "highContrast": "#d29922", "highContrastLight": "#9a6700" } },
+      { "id": "cp2.verdict.judging1", "description": "Judging (breathing) shade 1", "defaults": { "dark": "#b1bac4", "light": "#57606a", "highContrast": "#b1bac4", "highContrastLight": "#57606a" } },
+      { "id": "cp2.verdict.judging2", "description": "Judging (breathing) shade 2", "defaults": { "dark": "#8b949e", "light": "#6e7781", "highContrast": "#8b949e", "highContrastLight": "#6e7781" } },
+      { "id": "cp2.verdict.judging3", "description": "Judging (breathing) shade 3", "defaults": { "dark": "#6e7681", "light": "#8c959f", "highContrast": "#6e7681", "highContrastLight": "#8c959f" } },
+      { "id": "cp2.verdict.judging4", "description": "Judging (breathing) shade 4", "defaults": { "dark": "#545d68", "light": "#afb8c1", "highContrast": "#545d68", "highContrastLight": "#afb8c1" } }
+    ],
+    "configuration": {
+      "title": "cp2",
+      "properties": {
+        "cp2.cpp.compiler": { "type": "string", "default": "", "markdownDescription": "C++ compiler. Empty: `cph.language.cpp.Command`, else `g++`." },
+        "cp2.cpp.flags": { "type": "string", "default": "", "markdownDescription": "Flags for normal runs. Empty: `cph.language.cpp.Args`, else `-std=gnu++20 -DLOCAL -g -fsanitize=address,undefined -fno-sanitize-recover=all`. On native Windows (MinGW) the address sanitizer is dropped automatically." },
+        "cp2.cpp.judgeFlags": { "type": "string", "default": "-std=gnu++20 -O2 -DONLINE_JUDGE", "markdownDescription": "Flags used when a problem's **Judge flags** box is ticked (for tight time limits)." },
+        "cp2.c.compiler": { "type": "string", "default": "" },
+        "cp2.c.flags": { "type": "string", "default": "" },
+        "cp2.c.judgeFlags": { "type": "string", "default": "-std=gnu11 -O2 -DONLINE_JUDGE" },
+        "cp2.python.command": { "type": "string", "default": "", "markdownDescription": "Python interpreter. Empty: `cph.language.python.Command`, else `python3`." },
+        "cp2.python.args": { "type": "string", "default": "" },
+        "cp2.timeLimitMs": { "type": "number", "default": 0, "markdownDescription": "Time limit when a problem has none. 0: `cph.general.timeOut`, else 3000." },
+        "cp2.stackMb": { "type": "number", "default": 1024, "description": "Stack size for programs (MB). Deep recursion behaves like on Codeforces." },
+        "cp2.outputLimitMb": { "type": "number", "default": 256, "description": "Programs printing more than this are stopped (OLE)." },
+        "cp2.ignoreStderr": { "type": ["boolean", "null"], "default": null, "markdownDescription": "Non-empty stderr doesn't fail a case. Unset: `cph.general.ignoreSTDERROR`, else true." },
+        "cp2.runConcurrency": { "type": "number", "default": 4, "description": "Test cases run in parallel." },
+        "cp2.inlineKb": { "type": "number", "default": 1024, "description": "Cases larger than this are shown as a preview with an 'open in editor' button." },
+        "cp2.precompiledHeaders.enabled": { "type": "boolean", "default": true, "description": "Precompile bits/stdc++.h / bits/extc++.h per flag set (~4x faster compiles; ~200 MB each in the cache folder)." },
+        "cp2.precompiledHeaders.headers": { "type": "array", "items": { "type": "string" }, "default": ["bits/extc++.h", "bits/stdc++.h"] },
+        "cp2.cacheDir": { "type": "string", "default": "", "description": "Where precompiled headers are kept. Empty: ~/.cache/cp2." },
+        "cp2.stress.waFlags": { "type": "string", "default": "-std=gnu++20 -O2", "description": "Flags for sus/brute/gen in WA stress (no -DLOCAL, so debug output is compiled out)." },
+        "cp2.stress.reFlags": { "type": "string", "default": "-std=gnu++20 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -D_GLIBCXX_ASSERTIONS", "description": "Flags for sus in RE stress." },
+        "cp2.stress.workers": { "type": "number", "default": 8, "description": "Stress runs in parallel." },
+        "cp2.stress.maxIterations": { "type": "number", "default": 10000, "description": "Stop after this many runs without a failure (0 = until stopped)." },
+        "cp2.stress.helperTimeoutMs": { "type": "number", "default": 10000, "description": "Time limit for gen and brute." },
+        "cp2.stress.genTemplate": { "type": "string", "default": "templates/templategen.cpp", "description": "Template for new gen files (relative to the workspace root). Snippet syntax like $0 is allowed." },
+        "cp2.helperFlags": { "type": "string", "default": "-std=gnu++20 -O2", "description": "Flags for checkers and judges." },
+        "cp2.newFile.snippet": { "type": "string", "default": "tmpcf", "description": "Snippet (name or prefix) written into files created by Write Contest." },
+        "cp2.newFile.snippetLanguage": { "type": "string", "default": "cpp" },
+        "cp2.newFile.extension": { "type": "string", "default": ".cpp", "description": "Extension of files created by Write Contest." },
+        "cp2.contest.folders": { "type": "object", "default": {}, "markdownDescription": "Suggested folders for Write Contest, e.g. `{\"codeforces\": \"codeforces/${contestId}\", \"atcoder.abc\": \"atcoder/beginner/${hundreds}xx/${number}\"}`." },
+        "cp2.submit.languages": { "type": "object", "default": {}, "markdownDescription": "Regexes picking the submit language per site and file type, e.g. `{\"codeforces\": {\"cpp\": [\"G\\\\+\\\\+ ?23\"]}}`." },
+        "cp2.submit.confirm": { "type": "boolean", "default": true, "description": "Ask before submitting when the last run had failures or the file changed since it was last run." }
+      }
+    }
+  }
+}

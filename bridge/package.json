@@ -1,0 +1,22 @@
+{
+  "name": "cp2-bridge",
+  "displayName": "cp2 bridge",
+  "description": "Connects the cp2 browser extension to cp2. Runs on the machine with the browser, also when VS Code works in WSL, over SSH or in a container.",
+  "publisher": "caterpillow",
+  "version": "0.1.0",
+  "license": "MIT",
+  "engines": { "vscode": "^1.95.0" },
+  "categories": ["Other"],
+  "extensionKind": ["ui"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [{ "command": "cp2bridge.status", "title": "Show Status", "category": "cp2 bridge" }],
+    "configuration": {
+      "title": "cp2 bridge",
+      "properties": {
+        "cp2bridge.port": { "type": "number", "default": 27122, "description": "Port on 127.0.0.1 the browser extension connects to." }
+      }
+    }
+  }
+}

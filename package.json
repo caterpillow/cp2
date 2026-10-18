@@ -1,0 +1,29 @@
+{
+  "name": "cp2-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "cp2 — Competitive Programming Helper 2 (VS Code extension, UI bridge, browser extension)",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc -p extension && tsc -p extension/webview && tsc -p bridge && tsc -p browser && tsc -p test",
+    "test": "node scripts/test.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.14",
+    "@types/chrome": "^0.1.0",
+    "@types/node": "^20.17.0",
+    "@types/vscode": "~1.95.0",
+    "@types/ws": "^8.5.12",
+    "@vscode/codicons": "^0.0.46-24",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "jsonc-parser": "^3.3.1",
+    "linkedom": "^0.18.13",
+    "typescript": "~5.9.0",
+    "ws": "^8.22.0"
+  }
+}
