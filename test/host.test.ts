@@ -339,3 +339,36 @@ describe('integrations', () => {
     h.integ.dispose();
   });
 });
+
+describe('large cases', () => {
+  it('runs a 12 MB case without pushing it through the sidebar', async () => {
+    const SUM = '#include <cstdio>\nint main(){long long s=0,x;while(scanf("%lld",&x)==1)s+=x;printf("%lld\\n",s);}\n';
+    const root = await mkws({ 'big/s.cpp': SUM });
+    const nums: string[] = [];
+    let total = 0;
+    for (let i = 0; i < 3_000_000; i++) {
+      nums.push(String(i % 1000));
+      total += i % 1000;
+    }
+    await fsp.writeFile(path.join(root, 'big/in'), nums.join('\n') + '\n');
+    await fsp.writeFile(path.join(root, 'big/ans'), `${total}\n`);
+    const h = harness(root);
+    fake.config['cp2.cpp.flags'] = '-O2';
+    await h.c.setActive(path.join(root, 'big/s.cpp'));
+    const t0 = Date.now();
+    await h.c.runAll();
+    const s = await h.waitFor((x) => !x.running && x.cases[0]?.result?.verdict === 'AC', 30000);
+    const elapsed = Date.now() - t0;
+    const c = s.cases[0];
+    assert.ok(c.input.size > 10_000_000, `size ${c.input.size}`);
+    assert.equal(c.input.truncated, true);
+    assert.ok((c.input.text ?? '').length <= 1024 * 1024, 'only a preview is sent');
+    const t1 = Date.now();
+    await h.state();
+    const rerender = Date.now() - t1;
+    console.log(`    12 MB case: run+judge ${elapsed} ms, re-render ${rerender} ms`);
+    assert.ok(rerender < 200, `re-render took ${rerender} ms`);
+    h.c.dispose();
+    h.integ.dispose();
+  });
+});
