@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+				<title>Login - QOJ.ac</title>
+		
+		<script type="text/javascript">uojHome = '//qoj.ac'</script>
+		<script type="text/javascript">uojServerTimeZone = "Asia\/Shanghai"</script>
+	
+		<!-- jQuery (necessary for Bootstrap\'s JavaScript plugins) -->
+		<script type="text/javascript" src="//qoj.ac/js/jquery.min.js"></script>
+
+		<!-- jQuery autosize -->
+		<script type="text/javascript" src="//qoj.ac/js/jquery.autosize.min.js"></script>		<script type="text/javascript">
+			$(document).ready(function() {
+				$('textarea').autosize();
+			});
+		</script>
+		
+		<!-- jQuery cookie -->
+		<script type="text/javascript" src="//qoj.ac/js/jquery.cookie.min.js"></script>		
+		<!-- jQuery modal -->
+		<script type="text/javascript" src="//qoj.ac/js/jquery.modal.js"></script>		
+				<!-- Bootstrap core CSS -->
+		<link type="text/css" rel="stylesheet" href="//qoj.ac/css/bootstrap.min.css?v=2019.5.31">		<!-- Bootstrap Glyphicons CSS-->
+		<link type="text/css" rel="stylesheet" href="//qoj.ac/css/bootstrap-glyphicons.min.css?v=2019.5.31">
+		<!-- Custom styles for this template -->
+		<link type="text/css" rel="stylesheet" href="//qoj.ac/css/uoj-theme.css?v=4.3.3">		<!-- Include all compiled plugins (below), or include individual files as needed -->
+		<script type="text/javascript" src="//qoj.ac/js/popper.min.js?v=2019.5.31"></script>		<script type="text/javascript" src="//qoj.ac/js/bootstrap.min.js?v=2019.5.31"></script>		
+		<!-- Color converter -->
+		<script type="text/javascript" src="//qoj.ac/js/color-converter.min.js"></script>		
+		<!-- uoj -->
+		<script type="text/javascript" src="//qoj.ac/js/uoj.js?v=2026.10"></script>		
+		<!-- readmore -->
+		<script type="text/javascript" src="//qoj.ac/js/readmore/readmore.min.js"></script>		
+		<!-- LAB -->
+		<script type="text/javascript" src="//qoj.ac/js/LAB.min.js"></script>
+		<link rel="shortcut icon" href="/">
+
+		<link type="text/css" rel="stylesheet" href="//qoj.ac/css/flag-icon-css/css/flag-icon.css">		
+				
+		
+<link type="text/css" rel="stylesheet" href="//qoj.ac/css/font-awesome/5.13.0/all.min.css">
+				<!-- MD5 -->
+		<script type="text/javascript" src="//qoj.ac/js/md5.min.js"></script>				
+				
+				
+				<!-- MathJax -->
+		<script type="text/x-mathjax-config;executed=true">
+			MathJax.Hub.Config({
+				showProcessingMessages: false,
+				tex2jax: {
+					inlineMath: [["$", "$"], ["\\\\(", "\\\\)"]],
+					processEscapes:true
+				},
+				menuSettings: {
+					zoom: "Hover"
+    			}
+			});
+		</script>
+		<script src="/js/mathjax/MathJax.js?config=TeX-AMS_SVG"></script>
+				
+				
+		
+				
+				
+				
+				
+				<!-- shjs -->
+		<link type="text/css" rel="stylesheet" href="//qoj.ac/css/sh_typical.min.css">		<script type="text/javascript" src="//qoj.ac/js/sh_main.min.js"></script>		<script type="text/javascript">$(document).ready(function(){sh_highlightDocument()})</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/a11y-light.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+
+				
+		
+		
+				<!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+		<!--[if lt IE 9]>
+			<script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+			<script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+		<![endif]-->
+		
+		<script type="text/javascript">
+		before_window_unload_message = null;
+		$(window).on('beforeunload', function() {
+			if (before_window_unload_message !== null) {
+			    return before_window_unload_message;
+			}
+		});
+		</script>
+		
+			<style type="text/css">.MathJax_Hover_Frame {border-radius: .25em; -webkit-border-radius: .25em; -moz-border-radius: .25em; -khtml-border-radius: .25em; box-shadow: 0px 0px 15px #83A; -webkit-box-shadow: 0px 0px 15px #83A; -moz-box-shadow: 0px 0px 15px #83A; -khtml-box-shadow: 0px 0px 15px #83A; border: 1px solid #A6D ! important; display: inline-block; position: absolute}
+.MathJax_Menu_Button .MathJax_Hover_Arrow {position: absolute; cursor: pointer; display: inline-block; border: 2px solid #AAA; border-radius: 4px; -webkit-border-radius: 4px; -moz-border-radius: 4px; -khtml-border-radius: 4px; font-family: 'Courier New',Courier; font-size: 9px; color: #F0F0F0}
+.MathJax_Menu_Button .MathJax_Hover_Arrow span {display: block; background-color: #AAA; border: 1px solid; border-radius: 3px; line-height: 0; padding: 4px}
+.MathJax_Hover_Arrow:hover {color: white!important; border: 2px solid #CCC!important}
+.MathJax_Hover_Arrow:hover span {background-color: #CCC!important}
+</style><style type="text/css">#MathJax_About {position: fixed; left: 50%; width: auto; text-align: center; border: 3px outset; padding: 1em 2em; background-color: #DDDDDD; color: black; cursor: default; font-family: message-box; font-size: 120%; font-style: normal; text-indent: 0; text-transform: none; line-height: normal; letter-spacing: normal; word-spacing: normal; word-wrap: normal; white-space: nowrap; float: none; z-index: 201; border-radius: 15px; -webkit-border-radius: 15px; -moz-border-radius: 15px; -khtml-border-radius: 15px; box-shadow: 0px 10px 20px #808080; -webkit-box-shadow: 0px 10px 20px #808080; -moz-box-shadow: 0px 10px 20px #808080; -khtml-box-shadow: 0px 10px 20px #808080; filter: progid:DXImageTransform.Microsoft.dropshadow(OffX=2, OffY=2, Color='gray', Positive='true')}
+#MathJax_About.MathJax_MousePost {outline: none}
+.MathJax_Menu {position: absolute; background-color: white; color: black; width: auto; padding: 2px; border: 1px solid #CCCCCC; margin: 0; cursor: default; font: menu; text-align: left; text-indent: 0; text-transform: none; line-height: normal; letter-spacing: normal; word-spacing: normal; word-wrap: normal; white-space: nowrap; float: none; z-index: 201; box-shadow: 0px 10px 20px #808080; -webkit-box-shadow: 0px 10px 20px #808080; -moz-box-shadow: 0px 10px 20px #808080; -khtml-box-shadow: 0px 10px 20px #808080; filter: progid:DXImageTransform.Microsoft.dropshadow(OffX=2, OffY=2, Color='gray', Positive='true')}
+.MathJax_MenuItem {padding: 2px 2em; background: transparent}
+.MathJax_MenuArrow {position: absolute; right: .5em; padding-top: .25em; color: #666666; font-size: .75em}
+.MathJax_MenuActive .MathJax_MenuArrow {color: white}
+.MathJax_MenuArrow.RTL {left: .5em; right: auto}
+.MathJax_MenuCheck {position: absolute; left: .7em}
+.MathJax_MenuCheck.RTL {right: .7em; left: auto}
+.MathJax_MenuRadioCheck {position: absolute; left: 1em}
+.MathJax_MenuRadioCheck.RTL {right: 1em; left: auto}
+.MathJax_MenuLabel {padding: 2px 2em 4px 1.33em; font-style: italic}
+.MathJax_MenuRule {border-top: 1px solid #CCCCCC; margin: 4px 1px 0px}
+.MathJax_MenuDisabled {color: GrayText}
+.MathJax_MenuActive {background-color: Highlight; color: HighlightText}
+.MathJax_MenuDisabled:focus, .MathJax_MenuLabel:focus {background-color: #E8E8E8}
+.MathJax_ContextMenu:focus {outline: none}
+.MathJax_ContextMenu .MathJax_MenuItem:focus {outline: none}
+#MathJax_AboutClose {top: .2em; right: .2em}
+.MathJax_Menu .MathJax_MenuClose {top: -10px; left: -10px}
+.MathJax_MenuClose {position: absolute; cursor: pointer; display: inline-block; border: 2px solid #AAA; border-radius: 18px; -webkit-border-radius: 18px; -moz-border-radius: 18px; -khtml-border-radius: 18px; font-family: 'Courier New',Courier; font-size: 24px; color: #F0F0F0}
+.MathJax_MenuClose span {display: block; background-color: #AAA; border: 1.5px solid; border-radius: 18px; -webkit-border-radius: 18px; -moz-border-radius: 18px; -khtml-border-radius: 18px; line-height: 0; padding: 8px 0 6px}
+.MathJax_MenuClose:hover {color: white!important; border: 2px solid #CCC!important}
+.MathJax_MenuClose:hover span {background-color: #CCC!important}
+.MathJax_MenuClose:hover:focus {outline: none}
+</style><style type="text/css">.MathJax_Preview .MJXf-math {color: inherit!important}
+</style><style type="text/css">.MJX_Assistive_MathML {position: absolute!important; top: 0; left: 0; clip: rect(1px, 1px, 1px, 1px); padding: 1px 0 0 0!important; border: 0!important; height: 1px!important; width: 1px!important; overflow: hidden!important; display: block!important; -webkit-touch-callout: none; -webkit-user-select: none; -khtml-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none}
+.MJX_Assistive_MathML.MJX_Assistive_MathML_Block {width: 100%!important}
+</style><style type="text/css">#MathJax_Zoom {position: absolute; background-color: #F0F0F0; overflow: auto; display: block; z-index: 301; padding: .5em; border: 1px solid black; margin: 0; font-weight: normal; font-style: normal; text-align: left; text-indent: 0; text-transform: none; line-height: normal; letter-spacing: normal; word-spacing: normal; word-wrap: normal; white-space: nowrap; float: none; -webkit-box-sizing: content-box; -moz-box-sizing: content-box; box-sizing: content-box; box-shadow: 5px 5px 15px #AAAAAA; -webkit-box-shadow: 5px 5px 15px #AAAAAA; -moz-box-shadow: 5px 5px 15px #AAAAAA; -khtml-box-shadow: 5px 5px 15px #AAAAAA; filter: progid:DXImageTransform.Microsoft.dropshadow(OffX=2, OffY=2, Color='gray', Positive='true')}
+#MathJax_ZoomOverlay {position: absolute; left: 0; top: 0; z-index: 300; display: inline-block; width: 100%; height: 100%; border: 0; padding: 0; margin: 0; background-color: white; opacity: 0; filter: alpha(opacity=0)}
+#MathJax_ZoomFrame {position: relative; display: inline-block; height: 0; width: 0}
+#MathJax_ZoomEventTrap {position: absolute; left: 0; top: 0; z-index: 302; display: inline-block; border: 0; padding: 0; margin: 0; background-color: white; opacity: 0; filter: alpha(opacity=0)}
+</style><style type="text/css">.MathJax_Preview {color: #888; display: contents}
+#MathJax_Message {position: fixed; left: 1em; bottom: 1.5em; background-color: #E6E6E6; border: 1px solid #959595; margin: 0px; padding: 2px 8px; z-index: 102; color: black; font-size: 80%; width: auto; white-space: nowrap}
+#MathJax_MSIE_Frame {position: absolute; top: 0; left: 0; width: 0px; z-index: 101; border: 0px; margin: 0px; padding: 0px}
+.MathJax_Error {color: #CC0000; font-style: italic}
+</style><style type="text/css">.MJXp-script {font-size: .8em}
+.MJXp-right {-webkit-transform-origin: right; -moz-transform-origin: right; -ms-transform-origin: right; -o-transform-origin: right; transform-origin: right}
+.MJXp-bold {font-weight: bold}
+.MJXp-italic {font-style: italic}
+.MJXp-scr {font-family: MathJax_Script,'Times New Roman',Times,STIXGeneral,serif}
+.MJXp-frak {font-family: MathJax_Fraktur,'Times New Roman',Times,STIXGeneral,serif}
+.MJXp-sf {font-family: MathJax_SansSerif,'Times New Roman',Times,STIXGeneral,serif}
+.MJXp-cal {font-family: MathJax_Caligraphic,'Times New Roman',Times,STIXGeneral,serif}
+.MJXp-mono {font-family: MathJax_Typewriter,'Times New Roman',Times,STIXGeneral,serif}
+.MJXp-largeop {font-size: 150%}
+.MJXp-largeop.MJXp-int {vertical-align: -.2em}
+.MJXp-math {display: inline-block; line-height: 1.2; text-indent: 0; font-family: 'Times New Roman',Times,STIXGeneral,serif; white-space: nowrap; border-collapse: collapse}
+.MJXp-display {display: block; text-align: center; margin: 1em 0}
+.MJXp-math span {display: inline-block}
+.MJXp-box {display: block!important; text-align: center}
+.MJXp-box:after {content: " "}
+.MJXp-rule {display: block!important; margin-top: .1em}
+.MJXp-char {display: block!important}
+.MJXp-mo {margin: 0 .15em}
+.MJXp-mfrac {margin: 0 .125em; vertical-align: .25em}
+.MJXp-denom {display: inline-table!important; width: 100%}
+.MJXp-denom > * {display: table-row!important}
+.MJXp-surd {vertical-align: top}
+.MJXp-surd > * {display: block!important}
+.MJXp-script-box > *  {display: table!important; height: 50%}
+.MJXp-script-box > * > * {display: table-cell!important; vertical-align: top}
+.MJXp-script-box > *:last-child > * {vertical-align: bottom}
+.MJXp-script-box > * > * > * {display: block!important}
+.MJXp-mphantom {visibility: hidden}
+.MJXp-munderover, .MJXp-munder {display: inline-table!important}
+.MJXp-over {display: inline-block!important; text-align: center}
+.MJXp-over > * {display: block!important}
+.MJXp-munderover > *, .MJXp-munder > * {display: table-row!important}
+.MJXp-mtable {vertical-align: .25em; margin: 0 .125em}
+.MJXp-mtable > * {display: inline-table!important; vertical-align: middle}
+.MJXp-mtr {display: table-row!important}
+.MJXp-mtd {display: table-cell!important; text-align: center; padding: .5em 0 0 .5em}
+.MJXp-mtr > .MJXp-mtd:first-child {padding-left: 0}
+.MJXp-mtr:first-child > .MJXp-mtd {padding-top: 0}
+.MJXp-mlabeledtr {display: table-row!important}
+.MJXp-mlabeledtr > .MJXp-mtd:first-child {padding-left: 0}
+.MJXp-mlabeledtr:first-child > .MJXp-mtd {padding-top: 0}
+.MJXp-merror {background-color: #FFFF88; color: #CC0000; border: 1px solid #CC0000; padding: 1px 3px; font-style: normal; font-size: 90%}
+.MJXp-scale0 {-webkit-transform: scaleX(.0); -moz-transform: scaleX(.0); -ms-transform: scaleX(.0); -o-transform: scaleX(.0); transform: scaleX(.0)}
+.MJXp-scale1 {-webkit-transform: scaleX(.1); -moz-transform: scaleX(.1); -ms-transform: scaleX(.1); -o-transform: scaleX(.1); transform: scaleX(.1)}
+.MJXp-scale2 {-webkit-transform: scaleX(.2); -moz-transform: scaleX(.2); -ms-transform: scaleX(.2); -o-transform: scaleX(.2); transform: scaleX(.2)}
+.MJXp-scale3 {-webkit-transform: scaleX(.3); -moz-transform: scaleX(.3); -ms-transform: scaleX(.3); -o-transform: scaleX(.3); transform: scaleX(.3)}
+.MJXp-scale4 {-webkit-transform: scaleX(.4); -moz-transform: scaleX(.4); -ms-transform: scaleX(.4); -o-transform: scaleX(.4); transform: scaleX(.4)}
+.MJXp-scale5 {-webkit-transform: scaleX(.5); -moz-transform: scaleX(.5); -ms-transform: scaleX(.5); -o-transform: scaleX(.5); transform: scaleX(.5)}
+.MJXp-scale6 {-webkit-transform: scaleX(.6); -moz-transform: scaleX(.6); -ms-transform: scaleX(.6); -o-transform: scaleX(.6); transform: scaleX(.6)}
+.MJXp-scale7 {-webkit-transform: scaleX(.7); -moz-transform: scaleX(.7); -ms-transform: scaleX(.7); -o-transform: scaleX(.7); transform: scaleX(.7)}
+.MJXp-scale8 {-webkit-transform: scaleX(.8); -moz-transform: scaleX(.8); -ms-transform: scaleX(.8); -o-transform: scaleX(.8); transform: scaleX(.8)}
+.MJXp-scale9 {-webkit-transform: scaleX(.9); -moz-transform: scaleX(.9); -ms-transform: scaleX(.9); -o-transform: scaleX(.9); transform: scaleX(.9)}
+.MathJax_PHTML .noError {vertical-align: ; font-size: 90%; text-align: left; color: black; padding: 1px 3px; border: 1px solid}
+</style></head>
+	<body role="document"><div id="MathJax_Message" style="display: none;"></div>
+		<div class="container" role="main">
+						<div>
+				<ul class="nav nav-pills float-right" role="tablist">
+									<li class="nav-item" role="presentation"><a class="nav-link" href="//qoj.ac/login">Login</a></li>
+					<li class="nav-item" role="presentation"><a class="nav-link" href="//qoj.ac/register">Register</a></li>
+								</ul>
+				<h1 class="d-none d-sm-block">QOJ.ac</h1>
+				<h1 class="d-block d-sm-none">QOJ</h1>
+			</div>
+			
+			<div class="navbar navbar-light navbar-expand-md bg-light mb-4" role="navigation">
+	<a class="navbar-brand" href="//qoj.ac">QOJ</a>
+	<button type="button" class="navbar-toggler collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+		<span class="navbar-toggler-icon"></span>
+	</button>
+	<div class="collapse navbar-collapse" id="navbarSupportedContent">
+				<ul class="nav navbar-nav mr-auto navbar-transparent">
+			<li class="nav-item"><a class="nav-link" href="//qoj.ac/contests"><span class="glyphicon glyphicon-stats"></span> Contests</a></li>
+			<li class="nav-item"><a class="nav-link" href="//qoj.ac/category"><span class="glyphicon glyphicon-folder-close"></span> Category</a></li>
+			<li class="nav-item"><a class="nav-link" href="//qoj.ac/problems"><span class="glyphicon glyphicon-list-alt"></span> Problems</a></li>
+			<li class="nav-item"><a class="nav-link" href="//qoj.ac/submissions"><span class="glyphicon glyphicon-tasks"></span> Submissions</a></li>
+			<li class="nav-item"><a class="nav-link" href="//qoj.ac/hacks"><span class="glyphicon glyphicon-flag"></span> Hack!</a></li>
+			<li class="nav-item"><a class="nav-link" href="//qoj.ac/blogs"><span class="glyphicon glyphicon-book"></span> Blogs</a></li>
+
+		</ul>
+		<form id="form-search-problem" class="form-inline my-2 my-lg-0" method="get">
+			 <div class="input-group">
+				<input type="text" class="form-control" name="search" id="input-search" placeholder="Search the problem set">  
+				<div class="input-group-append">
+					<button type="submit" class="btn btn-search btn-outline-primary" id="submit-search"><span class="glyphicon glyphicon-search"></span></button>
+				</div>
+			</div>
+		</form>
+			</div><!--/.nav-collapse -->
+</div>
+
+<script type="text/javascript">
+	var zan_link = '';
+	$('#form-search-problem').submit(function(e) {
+		e.preventDefault();
+		
+		url = "//qoj.ac/problems";
+		qs = [];
+		$(['search']).each(function () {
+			if ($('#input-' + this).val()) {
+				qs.push(this + '=' + encodeURIComponent($('#input-' + this).val()));
+			}
+		});
+		if (qs.length > 0) {
+			url += '?' + qs.join('&');
+		}
+		location.href = url;
+	});
+</script>
+						
+			<div class="uoj-content">
+<h2 class="page-header">Login</h2>
+<form id="form-login" class="form-horizontal" method="post">
+  <div id="div-username" class="form-group">
+    <label for="input-username" class="col-sm-2 control-label">Username</label>
+    <div class="col-sm-3">
+      <input type="text" class="form-control" id="input-username" name="username" placeholder="Enter your username" maxlength="25">
+      <span class="help-block" id="help-username"></span>
+    </div>
+  </div>
+  <div id="div-password" class="form-group">
+    <label for="input-password" class="col-sm-2 control-label">Password</label>
+    <div class="col-sm-3">
+      <input type="password" class="form-control" id="input-password" name="password" placeholder="Enter your password" maxlength="20">
+      <span class="help-block" id="help-password"></span>
+    </div>
+  </div>
+  <div class="form-group">
+    <div class="col-sm-offset-2 col-sm-3">
+      <button type="submit" id="button-submit" class="btn btn-secondary">Submit</button>
+    </div>
+  </div>
+</form>
+<script type="text/javascript">
+function validateLoginPost() {
+	var ok = true;
+	ok &= getFormErrorAndShowHelp('username', validateUsername);
+	ok &= getFormErrorAndShowHelp('password', validatePassword);
+	return ok;
+}
+
+function submitLoginPost() {
+	if (!validateLoginPost()) {
+		return false;
+	}
+	
+	$.post('/login', {
+		_token : "x1DEBGFoZ4vGHgSgAgBSUGT7srAhNCdoYT1GrCSgCb1pmznvWseIMalKgoed",
+		login : '',
+		username : $('#input-username').val(),
+		password : md5($('#input-password').val()),
+		trust : '',
+	}, function(msg) {
+		if (msg == 'ok') {
+			var prevUrl = document.referrer;
+			if (prevUrl == '' || /.*\/login.*/.test(prevUrl) || /.*\/logout.*/.test(prevUrl) || /.*\/register.*/.test(prevUrl) || /.*\/reset-password.*/.test(prevUrl)) {
+				prevUrl = '/';
+			};
+			window.location.href = prevUrl;
+		} else if (msg == 'banned') {
+			$('#div-username').addClass('has-error');
+			$('#help-username').html('This user has no permissions. Please contact an administrator.');
+		} else if (msg == 'expired') {
+			$('#div-username').addClass('has-error');
+			$('#help-username').html('Page session has expired.');
+		} else if (msg == 'secure') {
+			$('#help-username').html('This login request cannot be processed for security reasons.');
+		} else if (msg == '2fa') {	
+			$('#help-username').html('Two-factor authentication is required. <a href="/login/2fa">Proceed to 2FA.</a>');
+		} else if (msg == 'pending_2fa') {	
+			$('#help-username').html('As an administrator without a token, go to the <a href="https://love.qingyu.us?username='+$('#input-username').val()+'">QOJ <i>NextGeneration</i>™ verification system</a> to log in to the system.');
+		}else if (msg == 'failed') {
+			$('#div-password').addClass('has-error');
+			$('#help-password').html('Incorrect username or password. <a href="/forgot-password">Forgot password?</a>');
+		} else {
+			$('#div-password').addClass('has-error');
+			$('#help-password').html('Login failed: ' + msg + '');
+		}
+	});
+	return true;
+}
+
+$(document).ready(function() {
+	$('#form-login').submit(function(e) {
+		e.preventDefault();
+		submitLoginPost();
+	});
+});
+
+</script>
+			</div>
+						<div class="uoj-footer">
+				<div class="btn-group dropright mb-3">
+					<button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-toggle="dropdown">
+						<span class="glyphicon glyphicon-globe"></span> English					</button>
+					<div class="dropdown-menu">
+					<a class="dropdown-item" href="//qoj.ac/login?locale=ar">العربية</a>
+						<a class="dropdown-item" href="//qoj.ac/login?locale=en">English</a>
+						<a class="dropdown-item" href="//qoj.ac/login?locale=es">Español</a>
+						<a class="dropdown-item" href="//qoj.ac/login?locale=fr">Français</a>
+						<a class="dropdown-item" href="//qoj.ac/login?locale=ja">日本語</a>
+						<a class="dropdown-item" href="//qoj.ac/login?locale=ko">한국어</a>
+							<a class="dropdown-item" href="//qoj.ac/login?locale=tr">Türkçe</a>
+							<a class="dropdown-item" href="//qoj.ac/login?locale=zh-cn">简体中文</a>
+						<a class="dropdown-item" href="//qoj.ac/login?locale=zh-tw">繁體中文</a>
+					</div>
+				</div>
+				
+				<ul class="list-inline"><li class="list-inline-item">QOJ.ac</li> | <li class="list-inline-item"> <a href="https://qoj.ac">QOJ 4.5.46 (2019-2026)</a></li></ul>
+				<p>Made with ❤️ by <a class="uoj-username" href="/user/profile/Qingyu" style="color:rgb(255, 51, 204)">Qingyu✨</a> | <a href="mailto:qingyu@qoj.ac">Contact us: qingyu@qoj.ac</a></p>
+				<p>Server Time: 2026-10-19 19:10:56 (UTC+8)</p>
+				<p class="uoj-time-zone-selector small"><span class="glyphicon glyphicon-time"></span> Time zone: <select class="custom-select custom-select-sm d-inline-block w-auto"><option value="auto">Local: Australia/Sydney (UTC+11)</option><option value="server">Server time: Asia/Shanghai (UTC+8)</option></select></p>
+			</div>
+					</div>
+		<!-- /container -->
+	<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon="{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;62952307bd8640429081742c37f14f92&quot;,&quot;spa&quot;:2}" crossorigin="anonymous"></script>
+
+
+</body></html>

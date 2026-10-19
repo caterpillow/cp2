@@ -1,21 +1,58 @@
 {
   "manifest_version": 3,
   "name": "cp2",
-  "version": "0.1.0",
-  "description": "Sends Codeforces / AtCoder samples, contests and submissions to cp2 in VS Code.",
+  "version": "0.2.0",
+  "description": "Sends samples, contests and submissions from Codeforces, AtCoder, DMOJ, QOJ, oj.uz and ORAC (or any page, via the toolbar icon) to cp2 in VS Code.",
   "minimum_chrome_version": "116",
-  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
     "default_title": "cp2: send this problem to VS Code",
-    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" }
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
   },
-  "background": { "service_worker": "background.js" },
-  "permissions": ["tabs", "storage", "scripting", "alarms", "offscreen"],
-  "host_permissions": ["*://codeforces.com/*", "*://*.codeforces.com/*", "*://atcoder.jp/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "alarms",
+    "offscreen",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://codeforces.com/*",
+    "*://*.codeforces.com/*",
+    "*://atcoder.jp/*",
+    "*://dmoj.ca/*",
+    "*://qoj.ac/*",
+    "*://oj.uz/*",
+    "*://orac2.info/*",
+    "*://static.oj.uz/*",
+    "http://127.0.0.1/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["*://codeforces.com/*", "*://*.codeforces.com/*", "*://atcoder.jp/*"],
-      "js": ["content.js"],
+      "matches": [
+        "*://codeforces.com/*",
+        "*://*.codeforces.com/*",
+        "*://atcoder.jp/*",
+        "*://dmoj.ca/*",
+        "*://qoj.ac/*",
+        "*://oj.uz/*",
+        "*://orac2.info/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ]

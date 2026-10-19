@@ -17,6 +17,7 @@ export interface Mark {
 export interface BoxOptions {
   editable: boolean;
   placeholder?: string;
+  wrap?: boolean;
   onChange?: (text: string) => void;
   onRun?: () => void;
   className?: string;
@@ -57,6 +58,8 @@ export class TextBox {
   private suppress = false;
   private readonlyC = new Compartment();
   private gutterC = new Compartment();
+  private wrapC = new Compartment();
+  private wrapping = false;
   rev = -1;
 
   constructor(
@@ -83,6 +86,7 @@ export class TextBox {
           runKeys,
           keymap.of([...defaultKeymap, ...historyKeymap]),
           this.readonlyC.of(this.ro(opts.editable)),
+          this.wrapC.of(opts.wrap ? EditorView.lineWrapping : []),
           opts.placeholder ? cmPlaceholder(opts.placeholder) : [],
           marksField,
           theme,
@@ -93,6 +97,13 @@ export class TextBox {
       }),
     });
     if (opts.className) this.view.dom.classList.add(opts.className);
+    this.wrapping = !!opts.wrap;
+  }
+
+  setWrap(on: boolean): void {
+    if (on === this.wrapping) return;
+    this.wrapping = on;
+    this.view.dispatch({ effects: this.wrapC.reconfigure(on ? EditorView.lineWrapping : []) });
   }
 
   private gutter() {

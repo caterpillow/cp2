@@ -82,3 +82,35 @@ export function parseAcSubmissions(doc: Document): VerdictRow[] {
   });
   return rows;
 }
+
+const DMOJ: Record<string, [VerdictStatus, string]> = {
+  AC: ['accepted', 'AC'],
+  WA: ['rejected', 'WA'],
+  TLE: ['rejected', 'TL'],
+  MLE: ['rejected', 'ML'],
+  OLE: ['rejected', 'OL'],
+  IR: ['rejected', 'IR'],
+  RTE: ['rejected', 'RE'],
+  CE: ['rejected', 'CE'],
+  IE: ['rejected', 'IE'],
+  AB: ['rejected', 'AB'],
+  SC: ['rejected', 'SC'],
+};
+
+/** DMOJ submission rows (list pages and the /widgets/single_submission snippet). */
+export function parseDmojSubmissions(doc: Document): VerdictRow[] {
+  const results = Array.from(doc.querySelectorAll('.sub-result'));
+  return results.map((res) => {
+    const row = res.closest('.submission-row');
+    const id = row?.getAttribute('id') ?? '';
+    const code = cleanText(res.querySelector('.state .status')) || (res.className.match(/sub-result\s+(\w+)/)?.[1] ?? '');
+    const score = cleanText(res.querySelector('.score'));
+    const sm = score.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+    const fin = DMOJ[code];
+    let status: VerdictStatus = fin ? fin[0] : 'judging';
+    if (status === 'rejected' && sm && Number(sm[1]) > 0) status = 'partial';
+    const a = (row ?? doc).querySelector('.name a[href^="/problem/"]');
+    const text = fin ? `${res.querySelector('.state .status')?.getAttribute('title') || code}${sm ? ` (${sm[1]}/${sm[2]})` : ''}` : code === 'QU' ? 'In queue' : 'Grading…';
+    return { submissionId: id, contestId: '', taskId: a ? (a.getAttribute('href') ?? '').split('/')[2] : null, text, status, short: fin ? fin[1] : '', final: !!fin, url: id ? `https://dmoj.ca/submission/${id}` : '' };
+  });
+}

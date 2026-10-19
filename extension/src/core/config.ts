@@ -56,6 +56,8 @@ export const DEFAULT_CONTEST_FOLDERS: Record<string, string> = {
   'atcoder.agc': 'atcoder/grand/${number}',
   'atcoder.ahc': 'atcoder/heuristic/${number}',
   atcoder: 'atcoder/${contestId}',
+  dmoj: 'dmoj/${contestId}',
+  qoj: 'qoj/${contestId}',
 };
 
 export const DEFAULT_SUBMIT_LANGUAGES: Record<string, Record<string, string[]>> = {
@@ -68,5 +70,10 @@ export const DEFAULT_SUBMIT_LANGUAGES: Record<string, Record<string, string[]>> 
     cpp: ['C\\+\\+ ?23.*(GCC|gcc)', 'C\\+\\+ ?20.*(GCC|gcc)', 'C\\+\\+.*(GCC|gcc)', 'C\\+\\+'],
     c: ['^C ?\\(?.*(GCC|gcc)', '^C\\b'],
     python: ['PyPy', 'Python'],
+  },
+  dmoj: {
+    cpp: ['C\\+\\+ ?23', 'C\\+\\+ ?20', 'C\\+\\+ ?17', 'C\\+\\+'],
+    c: ['^C ?1[178]', '^C\\b'],
+    python: ['PyPy ?3', 'Python ?3'],
   },
 };

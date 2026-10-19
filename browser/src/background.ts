@@ -6,14 +6,14 @@
 // - follows verdicts after a submit
 // - toolbar icon: send the current problem straight into the active file in VS Code
 
-import { contestKey, mySubmissionsUrl, parseContestUrl, parseProblemUrl, ProblemRef, problemKey, submitPageUrl } from '../../shared/problemId';
-import { BridgeToBrowser, BrowserToBridge, ContestInfo, ContestTask, DEFAULT_BRIDGE_PORT, FocusState, ProblemData, PROTOCOL_VERSION, SubmitArgs, SubmitResult, VerdictUpdate } from '../../shared/protocol';
+import { contestKey, mySubmissionsUrl, parseContestUrl, parseProblemUrl, ProblemRef, problemKey, Site, submitPageUrl, webRef } from '../../shared/problemId';
+import { BridgeToBrowser, BrowserToBridge, ContestInfo, ContestTask, DEFAULT_BRIDGE_PORT, FocusState, ProblemData, PROTOCOL_VERSION, SampleTest, SubmitArgs, SubmitResult, VerdictUpdate } from '../../shared/protocol';
 import { tasksFromStandingsJson } from './scrape/atcoder';
 import type { PageInfo } from './scrape/page';
 import type { VerdictRow } from './scrape/verdicts';
 
 const PORT = DEFAULT_BRIDGE_PORT;
-const SITE_TABS = ['*://codeforces.com/*', '*://*.codeforces.com/*', '*://atcoder.jp/*'];
+const SITE_TABS = ['*://codeforces.com/*', '*://*.codeforces.com/*', '*://atcoder.jp/*', '*://dmoj.ca/*', '*://qoj.ac/*', '*://oj.uz/*', '*://orac2.info/*'];
 
 interface Tracking {
   ref: ProblemRef;
@@ -65,7 +65,7 @@ function connect(): void {
   sock.onopen = () => {
     backoff = 1000;
     send({ type: 'hello', role: 'browser', version: PROTOCOL_VERSION, agent: navigator.userAgent });
-    void sendFocus(true);
+    void sendFocus(true).then(flushQueue);
     void chrome.action.setTitle({ title: 'cp2: send this problem to VS Code (connected)' });
   };
   sock.onmessage = (e) => {
@@ -92,8 +92,24 @@ function scheduleRetry(): void {
   backoff = Math.min(backoff * 2, 20000);
 }
 
+// Messages that must not be lost while the socket is (re)connecting, e.g. right after the
+// service worker was woken up by a page interaction. Focus is always re-sent on connect.
+const queue: BrowserToBridge[] = [];
+
 function send(m: BrowserToBridge): void {
-  if (connected()) ws!.send(JSON.stringify(m));
+  if (connected()) {
+    ws!.send(JSON.stringify(m));
+    return;
+  }
+  if (m.type === 'visit' || m.type === 'verdict' || m.type === 'icon') {
+    queue.push(m);
+    if (queue.length > 30) queue.shift();
+  }
+  connect();
+}
+
+function flushQueue(): void {
+  while (queue.length && connected()) ws!.send(JSON.stringify(queue.shift()));
 }
 
 let focusSig = '';
@@ -102,6 +118,11 @@ async function sendFocus(force = false): Promise<void> {
   const focus: FocusState = { problem: s.lastProblem?.data ?? null, contest: s.lastContest?.info ?? null };
   const sig = JSON.stringify([focus.problem ? `${problemKey(focus.problem.ref)}|${focus.problem.tests.length}|${focus.problem.name}` : '', focus.contest ? `${contestKey(focus.contest.ref)}|${focus.contest.tasks?.length ?? 0}|${focus.contest.name}` : '']);
   if (!force && sig === focusSig) return;
+  if (!connected()) {
+    // Sent (with whatever is newest by then) as soon as the connection opens.
+    connect();
+    return;
+  }
   focusSig = sig;
   send({ type: 'focus', focus });
 }
@@ -242,25 +263,63 @@ async function fetchText(url: string): Promise<string> {
   return r.text();
 }
 
+function toBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** Samples from a PDF statement (pdf.js runs in the offscreen document). */
+async function pdfSamples(url: string): Promise<SampleTest[]> {
+  const r = await fetch(url, { credentials: 'include' });
+  if (!r.ok) throw new Error(`couldn't download the PDF statement (HTTP ${r.status})`);
+  await ensureOffscreen();
+  const res = (await chrome.runtime.sendMessage({ target: 'offscreen', type: 'pdf', data: toBase64(await r.arrayBuffer()) })) as { ok: boolean; tests?: SampleTest[]; error?: string };
+  if (!res?.ok) throw new Error(`couldn't read the PDF: ${res?.error ?? 'unknown error'}`);
+  return res.tests ?? [];
+}
+
+/** Statements that are PDFs get their samples extracted when importing (not on every visit). */
+async function withPdf(d: ProblemData | null): Promise<ProblemData | null> {
+  if (!d || d.tests.length || !d.pdfUrl) return d;
+  try {
+    d.tests = await pdfSamples(d.pdfUrl);
+  } catch (e) {
+    d.note = String((e as Error).message ?? e);
+  }
+  if (!d.tests.length && !d.note) d.note = "the statement is a PDF and cp2 couldn't find Sample Input / Output blocks in it";
+  return d;
+}
+
 async function scrape(ref?: ProblemRef): Promise<ProblemData | null> {
   if (!ref) {
     const s = await load();
     const lp = s.lastProblem;
     if (!lp) return null;
-    return (await scrapeTab(lp.tabId, lp.data.ref)) ?? lp.data;
+    return withPdf((await scrapeTab(lp.tabId, lp.data.ref)) ?? lp.data);
   }
   const tab = await findProblemTab(ref);
   if (tab?.id !== undefined) {
     const d = await scrapeTab(tab.id, ref);
-    if (d) return d;
+    if (d) return withPdf(d);
+  }
+  if (ref.site === 'web' && /\.pdf($|[?#])/i.test(ref.url)) {
+    return { ref, name: decodeURIComponent(ref.url.split('/').pop() ?? 'statement.pdf'), tests: await pdfSamples(ref.url), scrapedAt: Date.now() };
   }
   const html = await fetchText(ref.url);
-  const info = await parseRemote<PageInfo>('page', html, ref.url, { index: ref.site === 'codeforces' ? ref.taskId : undefined });
+  const info = await parseRemote<PageInfo>('page', html, ref.url, { index: ref.site === 'codeforces' ? ref.taskId : undefined, generic: ref.site === 'web' });
   if (!info?.problem) throw new Error(`couldn't read the problem page (open ${ref.url} in a tab and try again)`);
-  return info.problem;
+  return withPdf(info.problem);
 }
 
-async function tasks(site: 'codeforces' | 'atcoder', contestId: string): Promise<ContestTask[] | null> {
+const CONTEST_PAGE: Partial<Record<Site, (id: string) => string>> = {
+  codeforces: (id) => `https://codeforces.com/contest/${id}`,
+  dmoj: (id) => `https://dmoj.ca/contest/${id}`,
+  qoj: (id) => `https://qoj.ac/contest/${id}`,
+};
+
+async function tasks(site: Site, contestId: string): Promise<ContestTask[] | null> {
   const s = await load();
   const lc = s.lastContest?.info;
   if (lc && lc.ref.site === site && lc.ref.contestId === contestId && lc.tasks?.length) return lc.tasks;
@@ -280,7 +339,9 @@ async function tasks(site: 'codeforces' | 'atcoder', contestId: string): Promise
     }
     return null;
   }
-  const url = `https://codeforces.com/contest/${contestId}`;
+  const page = CONTEST_PAGE[site];
+  if (!page) return null;
+  const url = page(contestId);
   const info = await parseRemote<PageInfo>('page', await fetchText(url), url);
   return info?.contest?.tasks ?? null;
 }
@@ -322,7 +383,7 @@ async function waitForUrl(tabId: number, pred: (u: string) => boolean, timeoutMs
 type FillResult = { ok?: boolean; noform?: boolean; needsCaptcha?: boolean; message?: string };
 
 /** Runs in the page (MAIN world): fills the site's own submit form and clicks submit. Must be self-contained. */
-function fillAndSubmit(site: string, code: string, fileName: string, patterns: string[], index: string, taskId: string, clickOnly: boolean): FillResult {
+async function fillAndSubmit(site: string, code: string, fileName: string, patterns: string[], index: string, taskId: string, clickOnly: boolean): Promise<FillResult> {
   const fire = (el: Element, type: string) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const pick = (sel: HTMLSelectElement): HTMLOptionElement | null => {
     const opts = Array.from(sel.options);
@@ -376,6 +437,36 @@ function fillAndSubmit(site: string, code: string, fileName: string, patterns: s
       }
     }
     const btn = form.querySelector('#singlePageSubmitButton, input[type="submit"], button[type="submit"]') as HTMLElement | null;
+    if (!btn) return { message: 'submit button not found' };
+    btn.click();
+    return { ok: true };
+  }
+  if (site === 'dmoj') {
+    const form = document.getElementById('problem_submit');
+    const lang = document.getElementById('id_language') as HTMLSelectElement | null;
+    if (!form || !lang) return { noform: true };
+    if (!clickOnly) {
+      const opt = pick(lang);
+      if (!opt) return { message: `no language matching ${patterns.join(' | ')}` };
+      if (w.jQuery) w.jQuery(lang).val(opt.value).trigger('change');
+      else {
+        lang.value = opt.value;
+        fire(lang, 'change');
+      }
+      // Changing language loads a template into the editor asynchronously; put the code in after.
+      await new Promise((r) => setTimeout(r, 900));
+      const ta = document.getElementById('id_source') as HTMLTextAreaElement | null;
+      try {
+        w.ace_source?.getSession().setValue(code);
+      } catch {
+        /* textarea below */
+      }
+      if (ta) {
+        ta.value = code;
+        fire(ta, 'change');
+      }
+    }
+    const btn = form.querySelector('input[type="submit"], button[type="submit"]') as HTMLElement | null;
     if (!btn) return { message: 'submit button not found' };
     btn.click();
     return { ok: true };
@@ -468,13 +559,13 @@ async function submit(a: SubmitArgs): Promise<SubmitResult> {
     }
   }
   if (!r?.ok) return { ok: false, message: r?.noform ? "couldn't find the submit form (are you logged in / registered for the contest?)" : r?.needsCaptcha ? 'captcha not completed' : (r?.message ?? 'submit failed') };
-  const landed = await waitForUrl(tabId, (u) => /\/(my|status)(\?|$)|\/submissions\/me|\/submissions\/\d+|\/submissions\?/.test(u), 20000);
+  const landed = await waitForUrl(tabId, (u) => /\/(my|status)(\?|$)|\/submissions\/me|\/submissions\/\d+|\/submissions\?|\/submission\/\d+/.test(u), 20000);
   if (!landed) {
     const err = await runInPage(tabId, readSubmitError, []);
     return { ok: false, message: err || 'the site did not accept the submission' };
   }
   const s = await load();
-  s.tracking = { ref, tabId, since: Date.now(), lastUpdate: Date.now() };
+  s.tracking = { ref, tabId, since: Date.now(), lastUpdate: Date.now(), submissionId: landed.match(/\/submission\/(\d+)/)?.[1] };
   await save(s);
   setBadge(tabId, '…', '#6e7681', 'Judging…');
   scheduleVerdictPoll();
@@ -525,7 +616,21 @@ async function verdictPoll(): Promise<void> {
     await save(s);
     return;
   }
-  if (Date.now() - t.lastUpdate > 5000 || (!t.submissionId && Date.now() - t.since > 15000)) {
+  if (t.ref.site === 'dmoj' && t.submissionId) {
+    // DMOJ's submission page doesn't list rows; its row widget gives the live status.
+    try {
+      const url = `https://dmoj.ca/widgets/single_submission?id=${t.submissionId}`;
+      const rows = await parseRemote<VerdictRow[]>('rows', await fetchText(url), url);
+      for (const r of rows) {
+        r.submissionId = t.submissionId;
+        r.taskId = t.ref.taskId;
+        r.url = `https://dmoj.ca/submission/${t.submissionId}`;
+      }
+      await onRows(-1, rows.slice(0, 1), true);
+    } catch {
+      /* try again */
+    }
+  } else if (Date.now() - t.lastUpdate > 5000 || (!t.submissionId && Date.now() - t.since > 15000)) {
     try {
       const url = mySubmissionsUrl(t.ref);
       const rows = await parseRemote<VerdictRow[]>('rows', await fetchText(url), url);
@@ -558,6 +663,17 @@ function onAck(requestId: string, ok: boolean, message: string): void {
   if (tabId !== undefined) setBadge(tabId, ok ? '✓' : '✗', ok ? '#2ea043' : '#da3633', message);
 }
 
+/** Toolbar icon on a page that isn't a known judge: PDFs directly, anything else heuristically. */
+async function iconScrape(tab: chrome.tabs.Tab): Promise<ProblemData | null> {
+  const url = tab.url ?? '';
+  if (/\.pdf($|[?#])/i.test(url)) {
+    return { ref: webRef(url), name: decodeURIComponent(url.split(/[?#]/)[0].split('/').pop() ?? 'statement.pdf'), tests: await pdfSamples(url), scrapedAt: Date.now() };
+  }
+  // activeTab lets us inject into the page the icon was clicked on.
+  await chrome.scripting.executeScript({ target: { tabId: tab.id! }, files: ['content.js'] });
+  return (await chrome.tabs.sendMessage(tab.id!, { type: 'scrape', generic: true })) as ProblemData | null;
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab.id === undefined) return;
   const tabId = tab.id;
@@ -566,16 +682,25 @@ chrome.action.onClicked.addListener(async (tab) => {
     setBadge(tabId, '✗', '#da3633', 'VS Code is not connected (is cp2-bridge installed and VS Code open?)');
     return;
   }
+  setBadge(tabId, '…', '#6e7681');
   const info = await pageInfoOf(tabId);
-  const problem = info?.problem ?? null;
+  let problem = info?.problem ?? null;
+  let error: string | undefined;
   if (info) await onInteract(tabId, info);
+  try {
+    if (!problem && info?.kind !== 'contest') problem = await iconScrape(tab);
+    problem = await withPdf(problem);
+    if (problem && !problem.tests.length && !problem.interactive) error = problem.note ?? "no samples found on this page";
+  } catch (e) {
+    error = String((e as Error)?.message ?? e);
+  }
+  if (!problem && !error) error = 'this page has no problem cp2 can read';
   const requestId = Math.random().toString(36).slice(2);
   acks.set(requestId, tabId);
-  setBadge(tabId, '…', '#6e7681');
-  send({ type: 'icon', requestId, problem, error: problem ? undefined : 'this is not a Codeforces / AtCoder problem page' });
+  send({ type: 'icon', requestId, problem: error && !problem?.tests.length ? null : problem, error });
   setTimeout(() => {
     if (acks.has(requestId)) onAck(requestId, false, 'VS Code did not answer');
-  }, 10000);
+  }, 15000);
 });
 
 // ---------------- lifecycle ----------------

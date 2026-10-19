@@ -684,3 +684,12 @@ label.check {
 #empty {
   padding: 16px 8px;
 }
+
+.import-note {
+  margin-top: 4px;
+  font-size: 0.88em;
+  color: var(--warn);
+}
+.field-btns .btn.tiny.active {
+  background: var(--vscode-toolbar-activeBackground, color-mix(in srgb, var(--vscode-focusBorder) 25%, transparent));
+}

@@ -20,7 +20,7 @@ await esbuild.build({
   format: 'cjs',
   target: 'node18',
   sourcemap: 'inline',
-  external: ['linkedom', 'bufferutil', 'utf-8-validate'],
+  external: ['linkedom', 'bufferutil', 'utf-8-validate', 'pdfjs-dist', 'pdfjs-dist/*'],
   alias: { vscode: join(root, 'test/fakeVscode.ts') },
   logLevel: 'warning',
   outExtension: { '.js': '.cjs' },

@@ -20,6 +20,12 @@ export interface ProblemData {
   memoryLimitMb?: number;
   interactive?: boolean;
   tests: SampleTest[];
+  /** The statement is a PDF: samples are extracted from it when importing. */
+  pdfUrl?: string;
+  /** File I/O problems (AIO style): the names the judge reads / writes. */
+  ioFiles?: { input: string; output: string };
+  /** Why no samples were found (shown in VS Code). */
+  note?: string;
   scrapedAt: number;
 }
 

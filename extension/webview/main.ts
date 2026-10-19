@@ -60,9 +60,13 @@ function debounce(fn: () => void, ms: number) {
 
 // ---------------- persistent UI bits ----------------
 
-const saved: { collapsed?: string[] } = vscode.getState() ?? {};
+const saved: { collapsed?: string[]; wrap?: Record<string, boolean> } = vscode.getState() ?? {};
 const collapsed = new Set<string>(saved.collapsed ?? []);
-const persist = () => vscode.setState({ collapsed: [...collapsed].slice(-500) });
+// Line wrap per kind of box (input, expected, received, stderr, ...): on by default except input.
+const wrapPrefs: Record<string, boolean> = saved.wrap ?? {};
+const wrapOn = (kind: string) => wrapPrefs[kind] ?? kind !== 'in';
+const persist = () => vscode.setState({ collapsed: [...collapsed].slice(-500), wrap: wrapPrefs });
+const liveFields = new Set<{ kind: string; applyWrap(): void }>();
 
 // ---------------- text cache (texts are only sent when they change) ----------------
 
@@ -112,10 +116,14 @@ class Field {
   private pending: ReturnType<typeof debounce> | null = null;
   private lastText = '';
 
+  readonly kind: string;
+
   constructor(
     private id: string,
     private opts: FieldOpts,
   ) {
+    this.kind = id.split('|').pop() ?? '';
+    liveFields.add(this);
     this.info = h('span', { class: 'field-info' });
     this.btns = h('span', { class: 'field-btns' });
     this.head = h('div', { class: 'field-head' }, h('span', { class: 'field-title' }, opts.title), this.info, this.btns);
@@ -137,6 +145,7 @@ class Field {
       this.box = new TextBox(this.body, {
         editable: vm.editable && !!this.opts.editable,
         placeholder: this.opts.placeholder,
+        wrap: wrapOn(this.kind),
         onRun: this.opts.onRun,
         onChange: (t) => {
           this.lastText = t;
@@ -155,7 +164,28 @@ class Field {
     if (vm.truncated) parts.push(vm.startLine > 1 ? `from line ${vm.startLine} · ${fmtBytes(vm.size)} total` : `first ${fmtBytes(text.length)} of ${fmtBytes(vm.size)}`);
     else if (vm.size > 4096) parts.push(fmtBytes(vm.size));
     this.info.textContent = parts.join(' · ');
-    this.btns.replaceChildren(...(this.opts.extraButtons?.() ?? []), ...(this.opts.onOpen ? [btn(null, 'go-to-file', this.opts.onOpen, { title: 'Open in editor', cls: 'tiny' })] : []), btn(null, 'copy', () => void navigator.clipboard.writeText(this.box?.text ?? ''), { title: 'Copy', cls: 'tiny' }));
+    this.renderButtons();
+  }
+
+  private renderButtons(): void {
+    const on = wrapOn(this.kind);
+    this.btns.replaceChildren(
+      ...(this.opts.extraButtons?.() ?? []),
+      btn(null, 'word-wrap', () => this.toggleWrap(), { title: on ? 'Line wrap is on (for every box of this kind)' : 'Line wrap is off (for every box of this kind)', cls: `tiny ${on ? 'active' : ''}` }),
+      ...(this.opts.onOpen ? [btn(null, 'go-to-file', this.opts.onOpen, { title: 'Open in editor', cls: 'tiny' })] : []),
+      btn(null, 'copy', () => void navigator.clipboard.writeText(this.box?.text ?? ''), { title: 'Copy', cls: 'tiny' }),
+    );
+  }
+
+  private toggleWrap(): void {
+    wrapPrefs[this.kind] = !wrapOn(this.kind);
+    persist();
+    for (const f of liveFields) if (f.kind === this.kind) f.applyWrap();
+  }
+
+  applyWrap(): void {
+    this.box?.setWrap(wrapOn(this.kind));
+    this.renderButtons();
   }
 
   setClass(cls: string, on: boolean): void {
@@ -169,6 +199,7 @@ class Field {
   destroy(): void {
     this.pending?.flush();
     this.box?.destroy();
+    liveFields.delete(this);
   }
 }
 
@@ -513,6 +544,7 @@ function renderHeader(s: ViewState): void {
     btn(s.submitBtn.label, 'cloud-upload', () => send({ type: 'submit' }), { title: s.submitBtn.title, disabled: !s.submitBtn.enabled, cls: 'grow' }),
   );
   hdr.replaceChildren(title, row1, row2);
+  if (s.importBtn.note) hdr.append(h('div', { class: 'import-note' }, icon('info'), ' ', s.importBtn.note));
   if (p.verdict) {
     const v = p.verdict;
     const chip = h('div', { class: `verdict-line vs-${v.status}`, title: v.url ?? '' }, h('span', { class: 'dot' }), v.text);
@@ -637,7 +669,7 @@ function renderCompile(s: ViewState): void {
     compileField = null;
   } else if (c.state === 'error') {
     if (!compileField || !compileEl.contains(compileField.el)) {
-      compileField = new Field('compile|err', { title: 'Compile error' });
+      compileField = new Field('compile|ce', { title: 'Compile error' });
       compileEl.replaceChildren(compileField.el);
     }
     const out = c.output || '(no output)';

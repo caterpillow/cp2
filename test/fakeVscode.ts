@@ -119,6 +119,7 @@ export const fake = {
   opened: [] as string[],
   watchers: [] as { dir: string; create: EventEmitter<Uri>; change: EventEmitter<Uri>; del: EventEmitter<Uri> }[],
   statusText: '',
+  statusBar: {} as Record<string, string>,
   decorationProviders: [] as any[],
   activeEditor: undefined as any,
   reset() {
@@ -215,12 +216,13 @@ export const window = {
   async withProgress(_o: unknown, fn: () => Promise<unknown>) {
     return fn();
   },
-  createStatusBarItem: () => ({
+  createStatusBarItem: (id?: string) => ({
     set text(t: string) {
-      fake.statusText = t;
+      fake.statusBar[id ?? ''] = t;
+      if (id === 'cp2.contest') fake.statusText = t;
     },
     get text() {
-      return fake.statusText;
+      return fake.statusBar[id ?? ''] ?? '';
     },
     tooltip: undefined as unknown,
     command: undefined as unknown,

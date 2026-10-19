@@ -10,5 +10,6 @@ A take on CPH without the clicking:
   custom checker); stdio-interactive problems with a judge or a manual chat-style run.
 * WA / RE stress testing (brute, gen, sus pickers at the bottom of the sidebar), with a smaller-failing-test search.
 * `Ctrl+Shift+R` runs everything, `Ctrl+Shift+I` imports the samples of the problem page you last touched in the
-  browser (needs the cp2 browser extension and **cp2 bridge**). Write whole contests, submit, and see verdicts as
-  explorer colours.
+  browser (needs the cp2 browser extension and **cp2 bridge**): Codeforces, AtCoder, DMOJ, QOJ, oj.uz, ORAC, and any
+  other page or PDF via the toolbar icon. Write whole contests, submit (Codeforces, AtCoder, DMOJ), and see verdicts
+  as explorer colours.

@@ -44,7 +44,13 @@ interface ToolInfo {
   version: string;
   machine: string;
   mingw: boolean;
+  clang: boolean;
+  /** full: as configured; trap: UBSan without runtime; none: sanitizers stripped (not linkable here). */
+  sanitizers: 'full' | 'trap' | 'none';
 }
+
+const HAS_SANITIZER = /(^|\s)-fsanitize=/;
+const SANITIZER_MISSING = /cannot find -l(asan|ubsan|lsan|tsan)|library not found for -l(asan|ubsan|lsan|tsan)|unsupported option '?-fsanitize|-fsanitize=\S+'? (is )?not supported|unrecognized command[- ]line option '?-fsanitize|sanitizer\S* (is )?not supported|libasan\S* not found|ld: library '(clang_rt\.)?(asan|ubsan)/i;
 
 interface CacheMeta {
   ok: boolean;
@@ -163,29 +169,35 @@ export class Compiler {
       t = (async () => {
         const v = await exec(compiler, ['-dumpversion'], os.tmpdir(), undefined, 20000);
         const m = await exec(compiler, ['-dumpmachine'], os.tmpdir(), undefined, 20000);
+        const full = await exec(compiler, ['--version'], os.tmpdir(), undefined, 20000);
         const machine = m.out.trim();
-        return { version: v.out.trim(), machine, mingw: /mingw|windows|msys|cygwin/i.test(machine) };
+        const mingw = /mingw|windows|msys|cygwin/i.test(machine);
+        return { version: v.out.trim(), machine, mingw, clang: /clang/i.test(full.out), sanitizers: mingw ? 'trap' : 'full' };
       })();
       this.tools.set(compiler, t);
     }
     return t;
   }
 
-  /** Platform fix-ups: MinGW can't link ASan, so drop it and make UBSan trap instead. */
+  /**
+   * Platform fix-ups. Where the sanitizer runtimes can't be linked (MinGW, Homebrew GCC on Apple
+   * Silicon) ASan is dropped and UBSan traps instead, or sanitizers go entirely.
+   */
   private adjust(flags: string[], tool: ToolInfo): string[] {
     let out = [...flags];
-    if (tool.mingw) {
+    if (tool.sanitizers !== 'full') {
       out = out
         .map((f) => {
           const m = f.match(/^-fsanitize=(.*)$/);
           if (!m) return f;
+          if (tool.sanitizers === 'none') return '';
           const kept = m[1].split(',').filter((s) => s !== 'address' && s !== 'leak' && s !== 'thread');
           return kept.length ? `-fsanitize=${kept.join(',')}` : '';
         })
-        .filter((f) => f);
-      if (out.some((f) => /^-fsanitize=.*undefined/.test(f))) out.push('-fsanitize-undefined-trap-on-error');
-      out.push(`-Wl,--stack,${this.opts.stackMb * 1024 * 1024}`);
+        .filter((f) => f && !(tool.sanitizers === 'none' && /^-f(no-)?sanitize/.test(f)));
+      if (tool.sanitizers === 'trap' && out.some((f) => /^-fsanitize=.*undefined/.test(f))) out.push('-fsanitize-undefined-trap-on-error');
     }
+    if (tool.mingw) out.push(`-Wl,--stack,${this.opts.stackMb * 1024 * 1024}`);
     return out;
   }
 
@@ -198,7 +210,16 @@ export class Compiler {
     }
     const t0 = Date.now();
     const tool = await this.tool(spec.compiler);
-    const flags = this.adjust(splitArgs(spec.flags), tool);
+    for (;;) {
+      const flags = this.adjust(splitArgs(spec.flags), tool);
+      const res = await this.buildWith(spec, lang, flags, tool, t0);
+      if (res.ok || tool.sanitizers === 'none' || !HAS_SANITIZER.test(flags.join(' ')) || !SANITIZER_MISSING.test(res.output)) return res;
+      tool.sanitizers = tool.sanitizers === 'full' ? 'trap' : 'none';
+      this.opts.log?.(`cp2: ${spec.compiler} can't link the sanitizer runtimes here; retrying with ${tool.sanitizers === 'trap' ? 'UBSan in trap mode (no ASan)' : 'no sanitizers'}`);
+    }
+  }
+
+  private async buildWith(spec: BuildSpec, lang: LangId, flags: string[], tool: ToolInfo, t0: number): Promise<Built> {
     const dir = path.dirname(spec.main);
     const sources = [spec.main, ...spec.extra.filter((f) => !isHeaderFile(f) && langOf(f) && langOf(f) !== 'python')];
     const contents = await Promise.all(sources.map((s) => fsp.readFile(s)));
@@ -222,7 +243,7 @@ export class Compiler {
     await mkdirp(outDir);
     const cwd = path.dirname(spec.main);
     const pchArgs = async (src: Buffer): Promise<{ args: string[]; used: boolean }> => {
-      if (!this.opts.pchEnabled || lang !== 'cpp') return { args: [], used: false };
+      if (!this.opts.pchEnabled || lang !== 'cpp' || tool.clang) return { args: [], used: false };
       const header = pchCandidate(src.toString('utf8'), this.opts.pchHeaders);
       if (!header) return { args: [], used: false };
       const inc = await this.pch.locate(spec.compiler, flags, header, tool, cwd);

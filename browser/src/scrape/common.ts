@@ -39,11 +39,51 @@ export function parseTimeLimit(text: string): number | undefined {
 
 /** "256 megabytes", "1024 MiB", "256 MB", "1 GB" -> MB */
 export function parseMemoryLimit(text: string): number | undefined {
-  const m = text.match(/([\d.]+)\s*(KiB|KB|MiB|MB|megabytes?|GiB|GB|gigabytes?)/i);
+  const m = text.match(/([\d.]+)\s*(KiB|KB|K|MiB|MB|M|megabytes?|GiB|GB|G|gigabytes?)\b/i);
   if (!m) return undefined;
   const v = Number(m[1]);
   const u = m[2].toLowerCase();
   if (u.startsWith('k')) return Math.round(v / 1024);
   if (u.startsWith('g')) return Math.round(v * 1024);
   return Math.round(v);
+}
+
+/** Value cells under header cells like "Time limit" / "Memory limit" (oj.uz, ORAC). */
+export function headerTable(doc: Document | Element): Map<string, string> {
+  const out = new Map<string, string>();
+  doc.querySelectorAll('table').forEach((t) => {
+    const rows = Array.from(t.querySelectorAll('tr'));
+    for (let i = 0; i + 1 < rows.length; i++) {
+      const heads = Array.from(rows[i].querySelectorAll('th')).map((c) => cleanText(c).toLowerCase());
+      if (!heads.length) continue;
+      const vals = Array.from(rows[i + 1].querySelectorAll('td')).map((c) => cleanText(c));
+      heads.forEach((h, k) => {
+        if (vals[k] !== undefined && !out.has(h)) out.set(h, vals[k]);
+      });
+    }
+  });
+  return out;
+}
+
+/** Absolute URL of a PDF statement embedded in the page (iframe / embed / object / pdf.js viewer). */
+export function embeddedPdf(doc: Document, base: string): string | undefined {
+  for (const el of Array.from(doc.querySelectorAll('iframe[src], embed[src], object[data]'))) {
+    const raw = el.getAttribute('src') ?? el.getAttribute('data') ?? '';
+    let url: URL;
+    try {
+      url = new URL(raw, base);
+    } catch {
+      continue;
+    }
+    const file = url.searchParams.get('file');
+    if (file) {
+      try {
+        return new URL(file, url).href;
+      } catch {
+        /* fall through */
+      }
+    }
+    if (/\.pdf($|[?#])/i.test(url.pathname + url.search) || /type=statement/.test(url.search) || /statement/i.test(url.pathname)) return url.href;
+  }
+  return undefined;
 }

@@ -56,7 +56,6 @@ const targets = [
     entryPoints: {
       background: join(root, 'browser/src/background.ts'),
       content: join(root, 'browser/src/content.ts'),
-      offscreen: join(root, 'browser/src/offscreen.ts'),
     },
     outdir: join(root, 'browser/dist'),
     platform: 'browser',
@@ -64,11 +63,22 @@ const targets = [
     target: 'chrome110',
     sourcemap: false,
   },
+  {
+    ...common,
+    // pdf.js is an ES module (top-level await), so the offscreen page loads this as a module.
+    entryPoints: { offscreen: join(root, 'browser/src/offscreen.ts') },
+    outdir: join(root, 'browser/dist'),
+    platform: 'browser',
+    format: 'esm',
+    target: 'chrome116',
+    sourcemap: false,
+  },
 ];
 
 function copyStatic() {
   mkdirSync(join(root, 'browser/dist'), { recursive: true });
   cpSync(join(root, 'browser/static'), join(root, 'browser/dist'), { recursive: true });
+  cpSync(join(root, 'node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs'), join(root, 'browser/dist/pdf.worker.mjs'));
   mkdirSync(join(root, 'extension/dist'), { recursive: true });
   for (const f of ['codicon.css', 'codicon.ttf']) cpSync(join(root, 'node_modules/@vscode/codicons/dist', f), join(root, 'extension/dist', f));
 }

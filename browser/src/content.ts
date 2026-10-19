@@ -6,12 +6,22 @@ import { analyzePage, PageInfo, submissionRows } from './scrape/page';
 
 declare global {
   interface Window {
-    __cp2Content?: boolean;
+    /** Set by a running copy of this script; false once that copy's extension context is gone. */
+    __cp2Alive?: () => boolean;
   }
 }
 
-if (!window.__cp2Content) {
-  window.__cp2Content = true;
+const alive = () => {
+  try {
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
+};
+
+// A copy left behind by a reloaded extension can't talk to it anymore: let this one take over.
+if (!window.__cp2Alive?.()) {
+  window.__cp2Alive = alive;
   let lastY = window.innerHeight / 2;
   let lastSent = 0;
   let pending: number | undefined;
@@ -19,6 +29,7 @@ if (!window.__cp2Content) {
   const info = (): PageInfo => analyzePage(document, location.href, { y: lastY });
 
   const notify = () => {
+    if (!alive()) return;
     const now = Date.now();
     const go = () => {
       lastSent = Date.now();
@@ -45,7 +56,7 @@ if (!window.__cp2Content) {
 
   chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     if (msg?.type === 'pageInfo') reply(info());
-    else if (msg?.type === 'scrape') reply(analyzePage(document, location.href, msg.index ? { index: msg.index } : { y: lastY }).problem);
+    else if (msg?.type === 'scrape') reply(analyzePage(document, location.href, { ...(msg.index ? { index: msg.index } : { y: lastY }), generic: !!msg.generic }).problem);
     else if (msg?.type === 'verdictRows') reply(submissionRows(document, location.href));
     return false;
   });

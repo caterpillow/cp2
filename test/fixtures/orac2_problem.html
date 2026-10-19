@@ -1,0 +1,282 @@
+
+
+<!DOCTYPE html>
+<html>
+    <head>
+        <!-- required meta tags -->
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        <meta property="og:site_name" content="ORAC">
+        
+<meta property="og:title" content="The Terrifying Canary-Bird">
+
+
+        <title>
+The Terrifying Canary-Bird
+ &mdash; ORAC</title>
+
+        
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css" integrity="sha384-Vkoo8x4CGsO3+Hhxv8T/Q5PaXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh" crossorigin="anonymous">
+        <link rel="shortcut icon" href="/static/favicon.ico">
+        <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.6.1/css/all.css">
+
+        
+        <link rel="stylesheet"
+              href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/10.5.0/styles/atelier-lakeside-light.min.css">
+        <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/10.5.0/highlight.min.js"></script>
+        <script src="//cdnjs.cloudflare.com/ajax/libs/highlightjs-line-numbers.js/2.8.0/highlightjs-line-numbers.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.2.0/languages/haskell.min.js"></script>
+        <script>hljs.initHighlightingOnLoad();hljs.initLineNumbersOnLoad();</script>
+
+        
+        <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+        
+        <script src="https://code.jquery.com/jquery-3.4.1.slim.min.js" integrity="sha384-J6qa4849blE2+poT4WnyKhv5vZF5SrPo0iEjwBvKU7imGFAV0wwj1yYfoRSJoZ+n" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
+        <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/js/bootstrap.min.js" integrity="sha384-wfSDF2E50Y2D1uUdj0O3uMBJnjuUD4Ih7YwaYd1iqfktj0Uod8GCExl3Og8ifwB6" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+        <script src="/static/custom.js"></script>
+
+        <!-- enable bootstrap tooltips -->
+        <script>
+            $(document).ready(function () {
+                $('[data-toggle="tooltip"]').tooltip()
+            })
+        </script>
+
+        
+    </head>
+    <body>
+        <link rel="stylesheet" type="text/css" href="/static/custom.css">
+
+        <nav class="navbar navbar-expand-md navbar-dark bg-dark mb-5">
+            <div class="container-xl">
+                <a class="navbar-brand" href="/hub/">ORAC</a>
+                <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#mainNavbar" aria-controls="mainNavbar" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="mainNavbar">
+                    <ul class="navbar-nav">
+                      <a class="nav-item nav-link " style="white-space: nowrap"
+                        href="/learn/">Learn</a>
+                      <a class="nav-item nav-link " href="/hub/personal/">Problems</a>
+                      <a class="nav-item nav-link " href="/hub/competitions/">Competitions</a>
+                      <a class="nav-item nav-link user-links "
+                        href="/hub/leaderboards/">Leaderboards</a>
+                      
+                    </ul>
+                    <ul class="navbar-nav ml-auto">
+                        <div class="nav-search-group">
+                            <form class="nav-item form-inline nav-search mr-sm-2 border border-secondary" action="/search/">
+                              <input class="form-control form-control-sm text-light bg-transparent border-0" id="nav-search-input" type="search" name="q" spellcheck="false" autocomplete="off" size="1" placeholder="Jump to..." onkeyup="scheduleAutoComplete()">
+                              <input type="submit" style="display:none" id="nav-search-submit">
+                              <span class="fas fa-search text-light mr-sm-1 pointer" onclick="document.getElementById('nav-search-submit').click()"></span>
+                            </form>
+                            
+                            <div class="nav-search-dropdown mr-sm-2" id="search-suggestions" onmousedown="this.parentElement.querySelector('form').classList.add('keep-alive');" onmouseout="this.classList.remove('hide-hover'); this.parentElement.querySelector('form').classList.remove('keep-alive');">
+                              <span class="nav-search-item search-placeholder-item text-muted" id="search-placeholder-item" onclick="this.parentElement.classList.add('hide-hover');">...</span>
+                            </div>
+                          </div>
+                        
+                            <li>
+                                <a class="nav-item nav-link" href="/accounts/login" style="white-space: nowrap">Log In</a>
+                            </li><li>
+                                <a class="nav-item nav-link" href="/accounts/register/">Register</a>
+                            </li>
+                        
+                    </ul>
+                </div>
+            </div>
+        </nav>
+
+        
+  
+
+
+        
+    <p style="margin-bottom:0.5rem;"></p>
+<nav class="navbar navbar-expand-md navbar-light sticky-top" style="background-color: #FFFFFF; padding-bottom:0px; z-index: 100;">
+    <div class="container-xl align-items-end nav-tabs">
+        <!-- On mobile screens place the title first, then the menu toggle icon, then the rest of the links below (in the toggler).
+        On larger screens (specifically medium/md and larger) reorder the title to be in the middle. -->
+        <div class="mx-auto order-md-3">
+            <ul class="navbar-nav flex-fill justify-content-center">
+                <li><h1 class="mb-0">The Terrifying Canary-Bird</h1></li>
+            </ul>
+        </div>
+        <button class="navbar-toggler ml-auto order-1" type="button" data-toggle="collapse" data-target=".problemNavbar" aria-controls="problemNavbar" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse problemNavbar order-2">
+            <ul class="navbar-nav text-nowrap">
+                <li><a class="nav-item nav-link user-links active" href="/problem/1/">Statement</a></li>
+                <li><a class="nav-item nav-link user-links " href="/problem/1/submissions">Submissions</a></li>
+            </ul>
+        </div>
+        <div class="collapse navbar-collapse problemNavbar order-4">
+            <ul class="navbar-nav text-nowrap ml-auto">
+                <li><a class="nav-item nav-link user-links " href="/problem/1/hof">Hall of Fame</a></li>
+                <li><a class="nav-item nav-link user-links " href="/problem/1/feedback">Report Issue</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+<br>
+
+
+
+        <div class="container-xl">
+            
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table class="table table-fixed w-auto mx-auto mb-0">
+  <thead class="thead-dark">
+    <tr>
+      
+        <th>Time Limit</th>
+      
+      
+        <th>Memory Limit</th>
+      
+      
+      <th>Input File</th>
+      
+      
+      <th>Output File</th>
+      
+    </tr>
+  </thead>
+
+  <tbody>
+    <tr>
+      
+        <td>1 second</td>
+      
+      
+        <td>256 MiB</td>
+      
+      
+      <td><tt>birdin.txt</tt></td>
+      
+      
+      <td><tt>birdout.txt</tt></td>
+      
+    </tr>
+  </tbody>
+</table>
+
+
+
+
+
+
+<div class="alert alert-info" role="alert">
+  <a href="/accounts/login?next=/problem/1">Log in</a> to submit!
+</div>
+
+
+
+
+<div class="embed-responsive embed-responsive-1by1 mb-4">
+  <iframe class="embed-responsive-item" src="/problem/1/statement.pdf" type="application/pdf" allowfullscreen></iframe>
+</div>
+<p>
+If the statement isn't loading correctly, you can
+<a href="/problem/1/statement.pdf" target="_blank">open it in a new tab</a>.
+</p>
+
+
+
+
+
+
+<h2 class="mt-5">Problem info</h2>
+<div class="card my-4">
+  <ul class="list-group list-group-flush">
+    
+      
+	<li class="list-group-item">
+	  There are no subtasks. This problem has 20 test cases.
+	</li>
+      
+    
+
+    
+
+    
+
+
+  </ul>
+</div>
+
+
+
+
+<script>
+  FILE_EXT_LOOKUP = {
+    cpp: "CPP11",
+    py: "PY3",
+    py3: "PY3",
+    cs: "CSMONO",
+    hs: "HS"
+  }
+  for (let elem of document.querySelectorAll('#solution-form input[type="file"]')) {
+    elem.onchange = function() {
+      let language = document.getElementById("id_language");
+      let val = elem.value;
+      if (val) {
+        let ext = val.split(".").slice(-1);
+        if (FILE_EXT_LOOKUP[ext]) {
+          language.value = FILE_EXT_LOOKUP[ext];
+        }
+      }
+    };
+  }
+
+  // Add the following code if you want the name of the file appear on select
+  $(".custom-file-input").on("change", function() {
+    var fileName = $(this).val().split("\\").pop();
+    if (fileName == '') {
+        fileName = '<div class="text-muted">No file chosen</div>'
+    }
+    $(this).siblings(".custom-file-label").addClass("selected").html(fileName);
+  });
+</script>
+
+
+        </div>
+
+        <hr class="x-hr-footer"/>
+        <footer class="text-muted">
+            <p class="text-center">
+                <a href="https://www.amt.edu.au/privacy-policy" class="mr-sm-3">Privacy statement</a>
+                <a href="/about/">About</a>
+                <br>
+                © Australian Maths Trust 2025
+            </p>
+        </footer>
+    </body>
+</html>

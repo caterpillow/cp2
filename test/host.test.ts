@@ -49,10 +49,10 @@ function harness(root: string): Harness {
   c.poster = { post: (m) => posts.push(m), visible: true, reveal() {} };
   const integ = new Integrations(c, ctx);
   c.extras = integ;
-  const state = async () => {
-    await (c as any).render();
-    const s = [...posts].reverse().find((m) => m.type === 'state') as Extract<ToWebview, { type: 'state' }>;
-    return s.state;
+  const state = async (): Promise<ViewState> => {
+    // Build directly (a timer-driven render may be in flight); include every text.
+    if (c.active) c.sessionIfLoaded(c.active)?.resetSent();
+    return (c as any).buildState();
   };
   const waitFor = async (pred: (s: ViewState) => boolean, ms = 20000) => {
     const end = Date.now() + ms;
@@ -252,12 +252,13 @@ describe('integrations', () => {
   const problem = (index: string, tests: { input: string; output: string }[]): ProblemData => ({ ref: { site: 'codeforces', contestId: '2261', taskId: index, index, url: `https://codeforces.com/contest/2261/problem/${index}`, cfKind: 'contest' }, name: `${index}. Thing`, timeLimitMs: 2000, memoryLimitMb: 256, interactive: false, tests, scrapedAt: Date.now() });
   const contest = (tasks: boolean): ContestInfo => ({ ref: { site: 'codeforces', contestId: '2261', url: 'https://codeforces.com/contest/2261', cfKind: 'contest' }, name: 'Codeforces Round X', tasks: tasks ? [{ index: 'A', taskId: 'A', name: 'Alpha', url: 'https://codeforces.com/contest/2261/problem/A', timeLimitMs: 1000 }, { index: 'B1', taskId: 'B1', name: 'Beta', url: 'https://codeforces.com/contest/2261/problem/B1' }] : null, endTime: Date.now() + 3600e3, seenAt: Date.now() });
   const submitted: any[] = [];
+  let focusTask = 'A';
 
   it('imports, writes contests from the snippet, auto-imports on visit, submits and colours verdicts', async () => {
     const root = await mkws({ 'old/z.cpp': DOUBLE });
     fake.commands.set('cp2bridge._state', () => ({ connected: true, leader: true, focus: { problem: problem('A', [{ input: '1\n', output: '2\n' }]), contest: contest(true) } }));
     fake.commands.set('cp2bridge._request', async (op: string, args: any) => {
-      if (op === 'scrape') return problem(args?.ref?.taskId ?? 'A', [{ input: '1\n', output: '2\n' }, { input: '2\n', output: '4\n' }]);
+      if (op === 'scrape') return problem(args?.ref?.taskId ?? focusTask, [{ input: '1\n', output: '2\n' }, { input: '2\n', output: '4\n' }]);
       if (op === 'submit') {
         submitted.push(args);
         return { ok: true, message: 'In queue' };
@@ -277,6 +278,25 @@ describe('integrations', () => {
     assert.equal(s.cases.filter((c) => c.origin === 'imported').length, 2);
     assert.equal(s.problem?.timeLimitMs, 2000);
     assert.equal(s.submitBtn.enabled, true);
+    assert.match(fake.statusBar['cp2.problem'] ?? '', /2261 A/);
+    assert.match(s.importBtn.label, /^Re-import · 2261 A/);
+
+    // the browser moves on to B1: the button follows it and says it will re-link the file
+    focusTask = 'B1';
+    await fake.commands.get('cp2._bridgeEvent')!({ type: 'focus', focus: { problem: problem('B1', [{ input: '7\n', output: '14\n' }]), contest: contest(true) } });
+    s = await h.state();
+    assert.match(s.importBtn.label, /^Import · 2261 B1/);
+    assert.match(s.importBtn.note ?? '', /Linked to 2261 A.*2261 B1 instead/);
+    await h.integ.doImport(z);
+    s = await h.state();
+    assert.match(s.importBtn.label, /^Re-import · 2261 B1/);
+    const zidx = (await h.c.indexFor(await h.c.storeFor(z))).data;
+    assert.equal(zidx.bindings['codeforces:2261:A'], undefined, 'old link removed');
+    assert.equal(zidx.bindings['codeforces:2261:B1'], 'old/z.cpp');
+    // back to A for the rest of the test
+    focusTask = 'A';
+    await fake.commands.get('cp2._bridgeEvent')!({ type: 'focus', focus: { problem: problem('A', [{ input: '1\n', output: '2\n' }]), contest: contest(true) } });
+    await h.integ.doImport(z);
 
     // Write contest into a folder
     const folder = path.join(root, 'codeforces/2261');

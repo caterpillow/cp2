@@ -8,7 +8,7 @@ import { exists, readText, statOrNull } from '../core/fsutil';
 import { langOf } from '../core/lang';
 import { resolveSnippet, snippetVars } from '../core/snippet';
 import { Binding, Problem, Store, StoreIndex, VerdictState } from '../core/store';
-import { contestKey, fileStemForIndex, problemKey, ProblemRef, shortProblemId, siteLabel } from '../../../shared/problemId';
+import { canSubmit, contestKey, fileStemForIndex, problemKey, ProblemRef, shortProblemId, siteLabel } from '../../../shared/problemId';
 import { BridgeEvent, BridgeState, CMD_BRIDGE_ACK, CMD_BRIDGE_EVENT, CMD_BRIDGE_REQUEST, CMD_BRIDGE_SNIPPET, CMD_BRIDGE_STATE, ContestInfo, ContestTask, ProblemData, SubmitResult, VerdictUpdate } from '../../../shared/protocol';
 import type { Controller, Extras } from './controller';
 
@@ -98,6 +98,7 @@ export class Integrations implements Extras, vscode.Disposable {
   private bridgeInstalled: boolean | null = null;
   private decorations = new VerdictDecorations();
   private statusItem = vscode.window.createStatusBarItem('cp2.contest', vscode.StatusBarAlignment.Left, 50);
+  private problemItem = vscode.window.createStatusBarItem('cp2.problem', vscode.StatusBarAlignment.Left, 51);
   private disposables: vscode.Disposable[] = [];
   private probeTimer: NodeJS.Timeout | undefined;
   private clock: NodeJS.Timeout;
@@ -109,8 +110,11 @@ export class Integrations implements Extras, vscode.Disposable {
     void ctx;
     this.statusItem.name = 'cp2 contest';
     this.statusItem.command = 'cp2.writeContest';
+    this.problemItem.name = 'cp2 browser problem';
+    this.problemItem.command = 'cp2.import';
     this.disposables.push(
       this.statusItem,
+      this.problemItem,
       this.decorations,
       vscode.window.registerFileDecorationProvider(this.decorations),
       vscode.commands.registerCommand(CMD_BRIDGE_EVENT, (ev: BridgeEvent) => this.onEvent(ev)),
@@ -188,29 +192,43 @@ export class Integrations implements Extras, vscode.Disposable {
 
   // ---------------- import ----------------
 
-  importButton(p: Problem): { label: string; title: string; enabled: boolean } {
+  importButton(p: Problem): { label: string; title: string; enabled: boolean; note?: string } {
     if (this.bridgeInstalled === false) return { label: 'Import', title: 'cp2-bridge is not installed', enabled: false };
     const b = p.meta.binding;
-    const focus = this.state.focus.problem;
-    if (b) {
-      const id = shortProblemId(refFromBinding(b));
-      return { label: `Import · ${id}`, title: `Re-import the samples of ${p.meta.name ?? id}${this.state.connected ? '' : ' (browser not connected)'}`, enabled: this.state.connected };
+    const bound = b ? refFromBinding(b) : null;
+    const focus = this.state.connected ? this.state.focus.problem : null;
+    if (focus) {
+      // The problem page you touched last in the browser always wins (it can replace a link).
+      const id = shortProblemId(focus.ref);
+      const name = focus.name.replace(/^[A-Za-z0-9]+[.\s-]+\s*/, '');
+      if (bound && problemKey(bound) === problemKey(focus.ref)) return { label: `Re-import · ${id}`, title: `Re-import the samples of ${focus.name} (Ctrl+Shift+I)`, enabled: true };
+      return {
+        label: `Import · ${id} — ${name}`,
+        title: `Import the samples of ${focus.name} (${focus.ref.url}) (Ctrl+Shift+I)`,
+        enabled: true,
+        note: bound ? `Linked to ${shortProblemId(bound)}. Importing links this file to ${id} instead.` : undefined,
+      };
+    }
+    if (bound) {
+      const id = shortProblemId(bound);
+      return { label: `Re-import · ${id}`, title: this.state.connected ? `Re-import the samples of ${p.meta.name ?? id}` : 'The browser extension is not connected', enabled: this.state.connected };
     }
     if (!this.state.connected) return { label: 'Import', title: 'The browser extension is not connected', enabled: false };
-    if (!focus) return { label: 'Import', title: 'Open a Codeforces or AtCoder problem in the browser first', enabled: false };
-    return { label: `Import · ${shortProblemId(focus.ref)} — ${focus.name.replace(/^[A-Za-z0-9]+[.\s-]+\s*/, '')}`, title: `Import the samples of ${focus.name} (${focus.ref.url})`, enabled: true };
+    return { label: 'Import', title: 'Open a problem in the browser first (or click the cp2 toolbar icon on any page)', enabled: false };
   }
 
   async doImport(file: string): Promise<void> {
     const p = await this.c.getProblem(file);
-    const ref = p.meta.binding ? refFromBinding(p.meta.binding) : undefined;
-    if (!ref && !this.state.focus.problem) {
-      void vscode.window.showInformationMessage('cp2: open a Codeforces or AtCoder problem in the browser first');
+    // Latest browser problem first; fall back to the problem this file is linked to.
+    const latest = this.state.connected ? this.state.focus.problem : null;
+    const ref = latest ? undefined : p.meta.binding ? refFromBinding(p.meta.binding) : undefined;
+    if (!latest && !ref) {
+      void vscode.window.showInformationMessage('cp2: open a problem in the browser first (or click the cp2 toolbar icon on the page)');
       return;
     }
     const data = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'cp2: importing samples' }, () => this.request<ProblemData | null>('scrape', { ref }));
     if (!data) {
-      void vscode.window.showWarningMessage('cp2: no samples found on that page');
+      void vscode.window.showWarningMessage('cp2: no problem found on that page');
       return;
     }
     await this.applyImport(file, data, false);
@@ -219,7 +237,18 @@ export class Integrations implements Extras, vscode.Disposable {
   private async applyImport(file: string, data: ProblemData, quiet: boolean): Promise<void> {
     const p = await this.c.getProblem(file);
     const tests = data.interactive ? [] : data.tests;
-    await p.replaceImported(tests);
+    const idx = await this.c.indexFor(p.store);
+    const old = p.meta.binding ? refFromBinding(p.meta.binding) : null;
+    const relinked = old && problemKey(old) !== problemKey(data.ref) ? old : null;
+    if (relinked) {
+      // A different problem now: drop the old link and its verdict.
+      if (idx.data.bindings[problemKey(relinked)] === p.store.rel(file)) delete idx.data.bindings[problemKey(relinked)];
+      p.meta.verdict = undefined;
+      delete idx.data.verdicts[p.store.rel(file)];
+      this.decorations.set(file, undefined);
+      p.meta.autoImported = false;
+    }
+    if (tests.length || !data.note) await p.replaceImported(tests);
     p.meta.name = data.name;
     p.meta.binding = bindingFromRef(data.ref);
     if (data.memoryLimitMb) p.meta.memoryLimitMb = data.memoryLimitMb;
@@ -228,14 +257,21 @@ export class Integrations implements Extras, vscode.Disposable {
     if (data.interactive) patch.interactive = true;
     p.updateSettings(patch);
     await p.flush();
-    const idx = await this.c.indexFor(p.store);
     idx.data.bindings[problemKey(data.ref)] = p.store.rel(file);
     idx.save();
     const s = this.c.sessionIfLoaded(file);
     if (s) for (const k of [...s.results.keys()]) if (!p.meta.order.includes(k) && !k.startsWith('f:')) s.results.delete(k);
     this.c.requestRender(0);
-    const msg = data.interactive ? `${shortProblemId(data.ref)} is interactive: linked it, samples not imported` : `imported ${tests.length} sample${tests.length === 1 ? '' : 's'} from ${shortProblemId(data.ref)} into ${path.basename(file)}`;
-    if (!quiet) vscode.window.setStatusBarMessage(`cp2: ${msg}`, 5000);
+    this.updateStatusBar();
+    const id = shortProblemId(data.ref);
+    let msg: string;
+    if (data.interactive) msg = `${id} is interactive: linked it, samples not imported`;
+    else if (!tests.length && data.note) msg = `linked ${path.basename(file)} to ${id}, but ${data.note}`;
+    else msg = `imported ${tests.length} sample${tests.length === 1 ? '' : 's'} from ${id} into ${path.basename(file)}${relinked ? ` (was linked to ${shortProblemId(relinked)})` : ''}`;
+    if (!quiet) {
+      if (!tests.length && data.note && !data.interactive) void vscode.window.showWarningMessage(`cp2: ${msg}`);
+      else vscode.window.setStatusBarMessage(`cp2: ${msg}`, 5000);
+    }
     this.c.log(msg);
   }
 
@@ -295,6 +331,7 @@ export class Integrations implements Extras, vscode.Disposable {
     const b = p.meta.binding;
     if (!b) return { label: 'Submit', title: 'Import the samples or write the contest first, so cp2 knows which problem this is', enabled: false };
     const id = shortProblemId(refFromBinding(b));
+    if (!canSubmit(b.site)) return { label: `Submit · ${id}`, title: `Submitting to ${siteLabel(b.site)} isn't supported (Codeforces, AtCoder and DMOJ are)`, enabled: false };
     if (this.bridgeInstalled === false) return { label: `Submit · ${id}`, title: 'cp2-bridge is not installed', enabled: false };
     return { label: `Submit · ${id}`, title: this.state.connected ? `Submit to ${b.url}` : 'The browser extension is not connected', enabled: this.state.connected };
   }
@@ -439,20 +476,14 @@ export class Integrations implements Extras, vscode.Disposable {
     if (!root) return null;
     const pats = this.c.cfg().contestFolders;
     const id = contest.ref.contestId;
-    let tpl: string | undefined;
     const vars: Record<string, string> = { contestId: id, site: contest.ref.site };
-    if (contest.ref.site === 'codeforces') tpl = pats.codeforces;
-    else {
-      const m = id.match(/^([a-z]+)(\d+)$/i);
-      if (m) {
-        const num = Number(m[2]);
-        vars.number = String(num);
-        vars.hundreds = String(Math.floor(num / 100));
-        tpl = pats[`atcoder.${m[1].toLowerCase()}`];
-      }
-      tpl = tpl ?? pats.atcoder;
+    const m = id.match(/^([a-z]+)(\d+)$/i);
+    if (m) {
+      const num = Number(m[2]);
+      vars.number = String(num);
+      vars.hundreds = String(Math.floor(num / 100));
     }
-    if (!tpl) return null;
+    const tpl = (m ? pats[`${contest.ref.site}.${m[1].toLowerCase()}`] : undefined) ?? pats[contest.ref.site] ?? `${contest.ref.site}/\${contestId}`;
     return path.join(root, tpl.replace(/\$\{(\w+)\}/g, (_, k) => vars[k] ?? ''));
   }
 
@@ -533,6 +564,7 @@ export class Integrations implements Extras, vscode.Disposable {
   // ---------------- status bar ----------------
 
   private updateStatusBar(): void {
+    this.updateProblemItem();
     const contest = this.state.focus.contest;
     if (!contest) {
       this.statusItem.hide();
@@ -542,11 +574,11 @@ export class Integrations implements Extras, vscode.Disposable {
       const parts: string[] = [`$(flag) ${siteLabel(contest.ref.site)} ${contest.ref.contestId}`];
       if (contest.tasks?.length) {
         const letters: string[] = [];
-        for (const t of contest.tasks) {
+        for (const [i, t] of contest.tasks.entries()) {
           const f = await this.fileForProblem({ site: contest.ref.site, contestId: contest.ref.contestId, taskId: t.taskId, url: t.url });
           const v = f ? this.decorations.get(f) : undefined;
           const mark = !v ? '' : v.status === 'accepted' ? '✓' : v.status === 'rejected' ? '✗' : v.status === 'partial' ? '~' : '…';
-          letters.push(t.index + mark);
+          letters.push((t.index.length > 3 ? String(i + 1) : t.index) + mark);
         }
         parts.push(letters.join(' '));
       }
@@ -561,6 +593,23 @@ export class Integrations implements Extras, vscode.Disposable {
       this.statusItem.tooltip = new vscode.MarkdownString(`**${contest.name}**\n\nClick to write this contest's files (a.cpp, b.cpp, …) into a folder.`);
       this.statusItem.show();
     })();
+  }
+
+  /** The problem page you touched last in the browser: what Import / Ctrl+Shift+I will use. */
+  private updateProblemItem(): void {
+    const p = this.state.connected ? this.state.focus.problem : null;
+    if (!p) {
+      this.problemItem.text = this.bridgeInstalled && !this.state.connected ? '$(debug-disconnect) cp2' : '';
+      this.problemItem.tooltip = 'cp2: the browser extension is not connected';
+      if (this.problemItem.text) this.problemItem.show();
+      else this.problemItem.hide();
+      return;
+    }
+    const name = p.name.replace(/^[A-Za-z0-9]+[.\s-]+\s*/, '');
+    this.problemItem.text = `$(browser) ${shortProblemId(p.ref)}${name ? ` · ${name.length > 28 ? name.slice(0, 27) + '…' : name}` : ''}`;
+    const target = this.c.active ? path.basename(this.c.active) : 'the active file';
+    this.problemItem.tooltip = new vscode.MarkdownString(`**${p.name}**\n\n${p.ref.url}\n\nThe problem page you used last in the browser. Click (or Ctrl+Shift+I) to import its samples into ${target}.`);
+    this.problemItem.show();
   }
 
   dispose(): void {

@@ -126,7 +126,7 @@ export interface ViewState {
   compile: { state: 'idle' | 'compiling' | 'ok' | 'error'; output?: string; judgeFlags: boolean; pch?: boolean };
   cases: CaseVM[];
   running: boolean;
-  importBtn: { label: string; title: string; enabled: boolean };
+  importBtn: { label: string; title: string; enabled: boolean; note?: string };
   submitBtn: { label: string; title: string; enabled: boolean };
   stress: { wa: StressSectionVM; re: StressSectionVM };
   manual: { visible: boolean; running: boolean; exit?: string };

@@ -106,3 +106,23 @@ describe('checkers and judges', () => {
     assert.equal(wa.verdict, 'WA');
   });
 });
+
+describe('sanitizer fallback', () => {
+  it('drops sanitizers the compiler cannot link and still builds', async () => {
+    const dir = await tmpdir();
+    const fakecc = path.join(dir, 'fakecc');
+    // Behaves like Homebrew GCC on Apple Silicon: no libasan / libubsan.
+    await fsp.writeFile(fakecc, '#!/bin/sh\nfor a in "$@"; do case "$a" in -fsanitize=*address*) echo "ld: cannot find -lasan" >&2; exit 1;; -fsanitize=*) case "$*" in *trap-on-error*) ;; *) echo "ld: cannot find -lubsan" >&2; exit 1;; esac;; esac; done\nexec g++ "$@"\n');
+    await fsp.chmod(fakecc, 0o755);
+    const src = path.join(dir, 'a.cpp');
+    await fsp.writeFile(src, '#include <cstdio>\nint main(){int x;scanf("%d",&x);printf("%d\\n",x*3);}\n');
+    const logs: string[] = [];
+    const c = new Compiler({ buildRoot: path.join(dir, 'build'), pchRoot: path.join(dir, 'pch'), pchEnabled: false, pchHeaders: [], stackMb: 1024, log: (m) => logs.push(m) });
+    const b = await c.build({ main: src, extra: [], compiler: fakecc, flags: '-O1 -fsanitize=address,undefined -fno-sanitize-recover=all' });
+    assert.ok(b.ok, b.output);
+    assert.ok(logs.some((l) => /trap mode/.test(l)), logs.join('\n'));
+    const r = await runProcess({ cmd: b.cmd, cwd: dir, stdin: { text: '7\n' }, stdoutFile: path.join(dir, 'out'), timeLimitMs: 5000, limits });
+    assert.equal(classifyRun(r), 'OK');
+    assert.equal(await fsp.readFile(path.join(dir, 'out'), 'utf8'), '21\n');
+  });
+});

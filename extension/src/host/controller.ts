@@ -27,7 +27,7 @@ export interface Poster {
 
 /** Hooks implemented by the import / submit / contest modules. */
 export interface Extras {
-  importButton(problem: Problem): { label: string; title: string; enabled: boolean };
+  importButton(problem: Problem): { label: string; title: string; enabled: boolean; note?: string };
   submitButton(problem: Problem): { label: string; title: string; enabled: boolean };
   bridgeConnected(): boolean;
   doImport(file: string): Promise<void>;
