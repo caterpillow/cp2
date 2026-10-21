@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "cp2",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Sends samples, contests and submissions from Codeforces, AtCoder, DMOJ, QOJ, oj.uz and ORAC (or any page, via the toolbar icon) to cp2 in VS Code.",
   "minimum_chrome_version": "116",
   "icons": {

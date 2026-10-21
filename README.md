@@ -33,6 +33,11 @@ sends problems from the judge to VS Code. Inspired by [CPH](https://github.com/a
 | A PDF open in a tab (browser viewer or Adobe Acrobat's extension) | ✓ samples only, file not linked | – | – |
 | Any other page | ✓ via the toolbar icon (best effort) | – | – |
 
+**A PDF with several problems** (a contest's statements in one file): select, roughly, the part with the samples you
+want in the browser's PDF viewer, then import; only the samples in the selection come in. Nothing selected: all of
+them. Local PDFs (`file://`) and Adobe's viewer can't be asked what's selected, so there cp2 uses what you copied
+(`Ctrl+C`) instead, if it's from that PDF.
+
 PDFs and other pages that aren't judge problems are imported **anonymously**: only the samples are copied, and
 the file isn't linked to anything, so Submit stays off. A tab showing a PDF becomes the "current problem" when you
 switch to it or it finishes loading. For local files (`file:///…`), turn on **Allow access to file URLs** for cp2
@@ -133,10 +138,12 @@ Reload VS Code after installing. The cp2 icon appears in the activity bar.
   and adds its output as a new case; with an answer program, that program's output becomes the expected output.
   With the gen or the brute open, the case goes to the folder's solution.
 - **Stress testing:** the two sections at the bottom of the sidebar. **Set up** turns `x.cpp` into `x/x.cpp`,
-  `x/xbrute.cpp` and `x/gen.cpp`. Generated tests go to `in` / `ans`; while it runs, the `in` case also shows sus's
+  `x/xbrute.cpp` (a copy of the solution, test cases included) and `x/gen.cpp`. Generated tests go to `in` / `ans`; while it runs, the `in` case also shows sus's
   output and stderr on the test on screen. After a failure, cp2 keeps looking for a
   smaller failing test for as long as the **smaller** slider says (default `cp2.stress.shrinkSeconds`, 0.5 s).
-- **Compare modes** live in the ⚙ panel (per file), which floats at the top of the sidebar (Esc closes it). A custom checker is run as `checker <input> <output> <expected>`
+- **Compare modes** live in the ⚙ panel (per file), which floats at the top of the sidebar (Esc closes it). So do the
+  file's own **compile flags** and judge flags (empty: the `cp2.cpp.flags` / `cp2.cpp.judgeFlags` settings).
+- **Tab** in a case's input moves to its expected output, **Shift+Tab** back. A custom checker is run as `checker <input> <output> <expected>`
   (testlib order), and exit code 0 means accepted.
 - **Interactive judges** receive the test case on stdin first, then the conversation (or as `argv[1]`, testlib style).
   Exit 0 = accepted.

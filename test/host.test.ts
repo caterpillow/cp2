@@ -12,7 +12,8 @@ import { Integrations } from '../extension/src/host/integrations';
 import { StressHost } from '../extension/src/host/stressHost';
 import type { ContestInfo, ProblemData } from '../shared/protocol';
 import type { ToWebview, ViewState } from '../shared/viewModel';
-import { fake, Uri } from './fakeVscode';
+import { squash } from '../shared/pdfSelect';
+import { clipboardState as fakeClipboard, fake, Uri } from './fakeVscode';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -187,6 +188,29 @@ describe('controller', () => {
     await h.c.onMessage({ type: 'setting', patch: { compare: 'standard' } });
     const s2 = await h.state();
     assert.equal(s2.cases.find((c) => c.key === 'f:in3')?.result?.verdict, 'WA', 're-judged without rerunning');
+  });
+
+  it("a file's own compile flags (and judge flags) replace the defaults; clearing them restores the defaults", async () => {
+    const src = await fsp.readFile(path.join(root, 'p/a.cpp'), 'utf8');
+    await fsp.writeFile(path.join(root, 'p/a.cpp'), '#include <cstdio>\nint main(){long long n;if(scanf("%lld",&n)!=1)return 0;\n#ifdef TWICE\nn*=2;\n#endif\nprintf("%lld\\n",n*2);}\n');
+    const recv = async () => {
+      await h.c.runAll();
+      const s = await h.waitFor((x) => !x.running && x.cases.every((c) => c.result && !['QUEUED', 'RUNNING'].includes(c.result.verdict)));
+      return s.cases.find((c) => c.key === 'f:in')!.result!.received!.text;
+    };
+    assert.equal(await recv(), '10\n');
+    await h.c.onMessage({ type: 'setting', patch: { flags: '-std=gnu++17 -DTWICE' } });
+    let s = await h.state();
+    assert.equal(s.problem?.settings.flags, '-std=gnu++17 -DTWICE');
+    assert.equal(s.problem?.defaultFlags, '-std=gnu++17 -O0', 'the default is shown as the placeholder');
+    assert.equal(await recv(), '20\n');
+    await h.c.onMessage({ type: 'setting', patch: { judgeFlags: true, judgeFlagsText: '-O1' } });
+    assert.equal(await recv(), '10\n', 'judge flags replace the normal ones');
+    await h.c.onMessage({ type: 'setting', patch: { judgeFlags: false, flags: '   ' } });
+    s = await h.state();
+    assert.equal(s.problem?.settings.flags, undefined, 'emptied: the default again');
+    assert.equal(await recv(), '10\n');
+    await fsp.writeFile(path.join(root, 'p/a.cpp'), src);
   });
 
   it('shows compile errors without running', async () => {
@@ -459,6 +483,43 @@ describe('gen case', () => {
   });
 });
 
+describe('pdf selection', () => {
+  it('imports only the samples in the selected (or copied) part of a contest PDF', async () => {
+    const root = await mkws({ 'p/a.cpp': DOUBLE, 'p/b.cpp': DOUBLE });
+    let data: any = null;
+    fake.commands.set('cp2bridge._state', () => ({ connected: true, leader: true, focus: { problem: data, contest: null } }));
+    fake.commands.set('cp2bridge._request', async (op: string) => (op === 'scrape' ? data : null));
+    const h = harness(root);
+    await sleep(50);
+    const a = path.join(root, 'p/a.cpp');
+    const b = path.join(root, 'p/b.cpp');
+    const doc = 'Problem A. Sums\nSample Input 1\n1 2\nSample Output 1\n3\nProblem B. Products\nSample Input 1\n5 5\nSample Output 1\n25\n';
+    const text = squash(doc);
+    const at = (s: string) => text.indexOf(squash(s));
+    const index = { text, spans: [[at('Sample Input 1\n1 2'), at('Sample Output 1\n3')], [at('Sample Input 1\n5 5'), at('Sample Output 1\n25')]] as [number, number][] };
+    const pdf = (selection?: { known: boolean; text: string }) => ({ ref: { site: 'web', contestId: '', taskId: 'https://x/c.pdf', url: 'https://x/c.pdf' }, name: 'c.pdf', anonymous: true, pdfUrl: 'https://x/c.pdf', tests: [{ input: '1 2\n', output: '3\n' }, { input: '5 5\n', output: '25\n' }], pdfIndex: index, pdfSelection: selection, scrapedAt: Date.now() });
+    const imported = async (file: string) => {
+      await fake.commands.get('cp2._bridgeEvent')!({ type: 'focus', focus: { problem: data, contest: null } });
+      await h.c.setActive(file);
+      await h.integ.doImport(file);
+      return (await h.state()).cases.filter((c) => c.origin === 'imported').map((c) => c.input.text);
+    };
+    data = pdf({ known: true, text: 'Products\nSample Input 1\n5 5\nSample Output 1' });
+    assert.deepEqual(await imported(a), ['5 5\n'], 'selected in the viewer');
+    data = pdf({ known: true, text: '' });
+    assert.deepEqual(await imported(a), ['1 2\n', '5 5\n'], 'nothing selected: everything');
+    // The viewer couldn't be asked (a local file): what was copied counts, if it's from this PDF.
+    fakeClipboard.text = 'A. Sums Sample Input 1 1 2';
+    data = pdf({ known: false, text: '' });
+    assert.deepEqual(await imported(a), ['1 2\n'], 'copied');
+    assert.deepEqual(await imported(b), ['1 2\n', '5 5\n'], 'the same copy again, for another file: stale');
+    fakeClipboard.text = 'int main() {}';
+    assert.deepEqual(await imported(a), ['1 2\n', '5 5\n'], 'clipboard not from this PDF');
+    h.c.dispose();
+    h.integ.dispose();
+  });
+});
+
 describe('races', () => {
   const SLOW = 'import time\nn=int(input())\ntime.sleep(0.4)\nprint(n*2)\n';
 
@@ -574,6 +635,11 @@ describe('stress', () => {
     const h = harness(root);
     const file = path.join(root, 'cf/x.cpp');
     await h.c.setActive(file);
+    await h.c.onMessage({ type: 'addCase' });
+    const mine = (await h.state()).cases[0].key;
+    await h.c.onMessage({ type: 'edit', key: mine, field: 'in', text: '3\n1 9 2\n', file });
+    await h.c.onMessage({ type: 'edit', key: mine, field: 'ans', text: '9\n', file });
+    await h.c.onMessage({ type: 'setting', patch: { compare: 'firstLine', timeLimitMs: 500 } });
     let s = await h.state();
     assert.equal(s.stress.wa.canRun, false);
     assert.equal(s.stress.wa.needsSetup, true);
@@ -584,6 +650,14 @@ describe('stress', () => {
     assert.ok(fs.existsSync(path.join(root, 'cf/x/xbrute.cpp')));
     assert.ok(fs.existsSync(path.join(root, 'cf/x/gen.cpp')));
     assert.equal(h.c.active, moved);
+    // The new brute starts with the solution's test cases (and how they're compared, not its time limit).
+    const bp = await h.c.getProblem(path.join(root, 'cf/x/xbrute.cpp'));
+    assert.equal(bp.meta.cases.length, 1);
+    assert.equal(await bp.readCaseText(bp.meta.cases[0].id, 'in'), '3\n1 9 2\n');
+    assert.equal(await bp.readCaseText(bp.meta.cases[0].id, 'ans'), '9\n');
+    assert.equal(bp.meta.settings.compare, 'firstLine');
+    assert.equal(bp.meta.settings.timeLimitMs, undefined);
+    await h.c.onMessage({ type: 'setting', patch: { compare: 'standard', timeLimitMs: 0 } });
     // brute: correct max; gen: random arrays
     await fsp.writeFile(path.join(root, 'cf/x/xbrute.cpp'), '#include <bits/stdc++.h>\nint main(){int n;std::cin>>n;std::vector<int>a(n);for(auto&x:a)std::cin>>x;std::cout<<*std::max_element(a.begin(),a.end())<<"\\n";}\n');
     await fsp.writeFile(path.join(root, 'cf/x/gen.py'), 'import random\nn=random.randint(1,6)\nprint(n)\nprint(*[random.randint(1,9) for _ in range(n)])\n');

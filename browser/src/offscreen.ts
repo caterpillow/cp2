@@ -3,7 +3,7 @@
 // The legacy build polyfills newer JS (Uint8Array.toHex etc.) for older Chromium-based browsers.
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { analyzePage, submissionRows } from './scrape/page';
-import { samplesFromPdf } from './scrape/pdf';
+import { analyzePdf } from './scrape/pdf';
 
 pdfjs.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdf.worker.mjs');
 
@@ -28,11 +28,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.target !== 'offscreen') return false;
   if (msg.type === 'pdf') {
     load(msg.url)
-      .then((data) => samplesFromPdf(pdfjs as any, data))
+      .then((data) => analyzePdf(pdfjs as any, data))
       .then(
-      (tests) => reply({ ok: true, tests }),
-      (e) => reply({ ok: false, error: String(e?.message ?? e) }),
-    );
+        ({ tests, index }) => reply({ ok: true, tests, index }),
+        (e) => reply({ ok: false, error: String(e?.message ?? e) }),
+      );
     return true;
   }
   try {

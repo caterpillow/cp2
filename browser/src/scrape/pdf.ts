@@ -5,6 +5,7 @@
 // headings (side by side or stacked) start a block; the block is the monospace text under the
 // heading, within the heading's column, until the next non-monospace text or heading.
 
+import { PdfIndex, squash } from '../../../shared/pdfSelect';
 import type { SampleTest } from '../../../shared/protocol';
 
 export interface PdfItem {
@@ -109,10 +110,23 @@ function segments(pages: PdfPage[]): Seg[] {
 }
 
 export function samplesFromPdfPages(pages: PdfPage[]): SampleTest[] {
+  return analyzePdfPages(pages).tests;
+}
+
+/** Samples, plus where each one is in the document's text (to keep only those in a selection). */
+export function analyzePdfPages(pages: PdfPage[]): { tests: SampleTest[]; index: PdfIndex } {
   const segs = segments(pages).filter((s) => s.text.trim());
+  // The document's text in reading order, squashed like selections are, and where each segment starts in it.
+  const offs: number[] = [];
+  let doc = '';
+  for (const s of segs) {
+    offs.push(doc.length);
+    doc += squash(s.text);
+  }
+  const end = (i: number) => (i + 1 < offs.length ? offs[i + 1] : doc.length);
   const heads = segs.map((s, i) => ({ s, i, c: classify(s.text) })).filter((h) => h.c) as { s: Seg; i: number; c: { kind: Kind; num?: number } }[];
   const anyMono = segs.some((s) => s.mono);
-  const ins: { num?: number; text: string }[] = [];
+  const ins: { num?: number; text: string; span: [number, number] }[] = [];
   const outs: { num?: number; text: string }[] = [];
   for (const h of heads) {
     const sameLine = heads.filter((o) => o !== h && o.s.page === h.s.page && Math.abs(o.s.y - h.s.y) < h.s.h);
@@ -120,6 +134,7 @@ export function samplesFromPdfPages(pages: PdfPage[]): SampleTest[] {
     const right = Math.min(Infinity, ...sameLine.filter((o) => o.s.x > h.s.x).map((o) => o.s.x)) - 1;
     const lines = new Map<number, Seg[]>();
     let lastY = h.s.y;
+    let last = h.i;
     for (let j = h.i + 1; j < segs.length; j++) {
       const s = segs[j];
       if (s.page !== h.s.page) break;
@@ -138,6 +153,7 @@ export function samplesFromPdfPages(pages: PdfPage[]): SampleTest[] {
       const k = near ?? key;
       lines.set(k, [...(lines.get(k) ?? []), s]);
       lastY = s.y;
+      last = j;
     }
     if (!lines.size) continue;
     const text =
@@ -151,11 +167,14 @@ export function samplesFromPdfPages(pages: PdfPage[]): SampleTest[] {
             .replace(/\s+$/, ''),
         )
         .join('\n') + '\n';
-    (h.c.kind === 'in' ? ins : outs).push({ num: h.c.num, text });
+    if (h.c.kind === 'in') ins.push({ num: h.c.num, text, span: [offs[h.i], end(last)] });
+    else outs.push({ num: h.c.num, text });
   }
-  if (!ins.length) return [];
   const numbered = ins.every((x) => x.num !== undefined) && new Set(ins.map((x) => x.num)).size === ins.length;
-  return ins.map((i, k) => ({ input: i.text, output: (numbered ? outs.find((o) => o.num === i.num) : outs[k])?.text ?? '' }));
+  return {
+    tests: ins.map((i, k) => ({ input: i.text, output: (numbered ? outs.find((o) => o.num === i.num) : outs[k])?.text ?? '' })),
+    index: { text: doc, spans: ins.map((i) => i.span) },
+  };
 }
 
 /** Minimal shape of the pdf.js module we use (so this file doesn't import it). */
@@ -186,4 +205,8 @@ export async function pdfPages(pdfjs: PdfJs, data: Uint8Array, maxPages = 30): P
 
 export async function samplesFromPdf(pdfjs: PdfJs, data: Uint8Array): Promise<SampleTest[]> {
   return samplesFromPdfPages(await pdfPages(pdfjs, data));
+}
+
+export async function analyzePdf(pdfjs: PdfJs, data: Uint8Array): Promise<{ tests: SampleTest[]; index: PdfIndex }> {
+  return analyzePdfPages(await pdfPages(pdfjs, data));
 }

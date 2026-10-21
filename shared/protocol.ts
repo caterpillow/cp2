@@ -1,3 +1,4 @@
+import type { PdfIndex } from './pdfSelect';
 // Messages exchanged between the browser extension, cp2-bridge (runs next to the browser)
 // and cp2 (runs next to your files). Bridge <-> cp2 travels over VS Code commands, so
 // everything here must be plain JSON.
@@ -31,6 +32,13 @@ export interface ProblemData {
    * isn't linked to anything.
    */
   anonymous?: boolean;
+  /** PDF statements: where each sample is in the text, to keep only those in a selection. */
+  pdfIndex?: PdfIndex;
+  /**
+   * What's selected in the PDF viewer when importing. `known: false`: the viewer couldn't be asked (a local file, or
+   * another extension's viewer), so VS Code may look at the clipboard instead.
+   */
+  pdfSelection?: { known: boolean; text: string };
   scrapedAt: number;
 }
 

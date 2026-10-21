@@ -254,4 +254,5 @@ export const commands = {
   },
 };
 
-export const env = { openExternal: async () => true };
+export const clipboardState = { text: '' };
+export const env = { openExternal: async () => true, clipboard: { readText: async () => clipboardState.text, writeText: async (t: string) => void (clipboardState.text = t) } };

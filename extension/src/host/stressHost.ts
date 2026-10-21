@@ -250,6 +250,8 @@ export class StressHost {
     const opened: string[] = [];
     if (plan.createBrute) {
       await atomicWrite(plan.createBrute, (await readText(sus)) ?? '');
+      // The brute starts as a copy of the solution: with its test cases too.
+      await (await this.c.getProblem(plan.createBrute)).copyCasesFrom(await this.c.getProblem(sus));
       opened.push(plan.createBrute);
     }
     if (plan.createGen) {

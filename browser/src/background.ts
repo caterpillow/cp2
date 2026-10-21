@@ -9,6 +9,7 @@
 import { contestKey, mySubmissionsUrl, parseContestUrl, parseProblemUrl, pdfName, pdfUrlOf, ProblemRef, problemKey, Site, submitPageUrl, webRef } from '../../shared/problemId';
 import { BridgeToBrowser, BrowserToBridge, ContestInfo, ContestTask, DEFAULT_BRIDGE_PORT, FocusState, ProblemData, PROTOCOL_VERSION, SampleTest, SubmitArgs, SubmitResult, VerdictUpdate } from '../../shared/protocol';
 import { tasksFromStandingsJson } from './scrape/atcoder';
+import type { PdfIndex } from '../../shared/pdfSelect';
 import type { PageInfo } from './scrape/page';
 import type { VerdictRow } from './scrape/verdicts';
 
@@ -288,18 +289,60 @@ async function fetchText(url: string): Promise<string> {
 }
 
 /** Samples from a PDF statement. The offscreen document downloads (also file:// URLs) and parses it. */
-async function pdfSamples(url: string): Promise<SampleTest[]> {
+async function pdfSamples(url: string): Promise<{ tests: SampleTest[]; index?: PdfIndex }> {
   await ensureOffscreen();
-  const res = (await chrome.runtime.sendMessage({ target: 'offscreen', type: 'pdf', url })) as { ok: boolean; tests?: SampleTest[]; error?: string };
+  const res = (await chrome.runtime.sendMessage({ target: 'offscreen', type: 'pdf', url })) as { ok: boolean; tests?: SampleTest[]; index?: PdfIndex; error?: string };
   if (!res?.ok) throw new Error(res?.error ?? "couldn't read the PDF");
-  return res.tests ?? [];
+  return { tests: res.tests ?? [], index: res.index };
 }
 
-/** Statements that are PDFs get their samples extracted when importing (not on every visit). */
-async function withPdf(d: ProblemData | null): Promise<ProblemData | null> {
+/**
+ * Runs in each frame of the tab: asks the PDF viewers embedded there (Chromium's viewer answers the embedder's
+ * getSelectedText) for their selection. null: no viewer here, or it didn't answer (local files: the reply can't be
+ * addressed to a file:// page).
+ */
+function askPdfSelection(): Promise<string | null> {
+  const viewers = Array.from(document.querySelectorAll('embed')).filter((e) => /pdf/i.test(e.type) || /\.pdf\b/i.test(e.getAttribute('original-url') ?? e.getAttribute('src') ?? ''));
+  if (!viewers.length) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const done = (v: string | null) => {
+      window.removeEventListener('message', onMessage);
+      clearTimeout(timer);
+      resolve(v);
+    };
+    const onMessage = (m: MessageEvent) => {
+      if (m.data && typeof m.data.selectedText === 'string') done(m.data.selectedText);
+    };
+    window.addEventListener('message', onMessage);
+    const timer = setTimeout(() => done(null), 800);
+    for (const v of viewers) (v as unknown as { postMessage(m: unknown, o: string): void }).postMessage({ type: 'getSelectedText' }, '*');
+  });
+}
+
+/** What's selected in the PDF shown in a tab (as a page, or embedded in one). */
+async function pdfSelection(tabId: number): Promise<{ known: boolean; text: string }> {
+  try {
+    const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: askPdfSelection });
+    const answers = results.map((r) => r.result).filter((x): x is string => typeof x === 'string');
+    if (!answers.length) return { known: false, text: '' };
+    return { known: true, text: answers.find((t) => t.trim()) ?? '' };
+  } catch {
+    // Not scriptable (another extension's viewer, no file access): VS Code may use the clipboard instead.
+    return { known: false, text: '' };
+  }
+}
+
+/**
+ * Statements that are PDFs get their samples extracted when importing (not on every visit). `tabId`: the tab showing
+ * it, whose selection limits the import to the samples inside it (contest PDFs with several problems).
+ */
+async function withPdf(d: ProblemData | null, tabId?: number): Promise<ProblemData | null> {
   if (!d || d.tests.length || !d.pdfUrl) return d;
   try {
-    d.tests = await pdfSamples(d.pdfUrl);
+    const { tests, index } = await pdfSamples(d.pdfUrl);
+    d.tests = tests;
+    d.pdfIndex = index;
+    if (tests.length > 1) d.pdfSelection = tabId === undefined ? { known: true, text: '' } : await pdfSelection(tabId);
   } catch (e) {
     d.note = String((e as Error).message ?? e);
   }
@@ -312,12 +355,12 @@ async function scrape(ref?: ProblemRef): Promise<ProblemData | null> {
     const s = await load();
     const lp = s.lastProblem;
     if (!lp) return null;
-    return withPdf((await scrapeTab(lp.tabId, lp.data.ref)) ?? lp.data);
+    return withPdf((await scrapeTab(lp.tabId, lp.data.ref)) ?? lp.data, lp.tabId);
   }
   const tab = await findProblemTab(ref);
   if (tab?.id !== undefined) {
     const d = await scrapeTab(tab.id, ref);
-    if (d) return withPdf(d);
+    if (d) return withPdf(d, tab.id);
   }
   const pdf = ref.site === 'web' ? pdfProblem(ref.url) : null;
   if (pdf) return withPdf(pdf);
@@ -701,7 +744,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (info) await onInteract(tabId, info);
   try {
     if (!problem && info?.kind !== 'contest') problem = await iconScrape(tab);
-    problem = await withPdf(problem);
+    problem = await withPdf(problem, tabId);
     if (problem && !problem.tests.length && !problem.interactive) error = problem.note ?? "no samples found on this page";
   } catch (e) {
     error = String((e as Error)?.message ?? e);

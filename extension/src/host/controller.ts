@@ -160,7 +160,7 @@ export class Controller implements vscode.Disposable {
     }
     const lc = lang === 'c' ? cfg.c : cfg.cpp;
     const flags =
-      kind === 'debug' ? lc.flags : kind === 'judge' ? lc.judgeFlags : kind === 'stressWA' ? (lang === 'c' ? cfg.c.judgeFlags : cfg.stress.waFlags) : kind === 'stressRE' ? (lang === 'c' ? cfg.c.flags : cfg.stress.reFlags) : lang === 'c' ? cfg.c.judgeFlags : cfg.helperFlags;
+      kind === 'debug' ? (st.flags ?? lc.flags) : kind === 'judge' ? (st.judgeFlagsText ?? lc.judgeFlags) : kind === 'stressWA' ? (lang === 'c' ? cfg.c.judgeFlags : cfg.stress.waFlags) : kind === 'stressRE' ? (lang === 'c' ? cfg.c.flags : cfg.stress.reFlags) : lang === 'c' ? cfg.c.judgeFlags : cfg.helperFlags;
     await this.saveIfDirty(file);
     for (const f of extra) await this.saveIfDirty(f);
     return this.compilerFor(store).build({ main: file, extra, compiler: lc.compiler, flags, python: cfg.python });
@@ -443,6 +443,8 @@ export class Controller implements vscode.Disposable {
         compileCandidates: listing.files.filter((n) => isCompileWithCandidate(n) && n !== path.basename(file)).sort(),
         checkerExists: listing.files.includes(st.checker),
         judgeExists: listing.files.includes(st.judge),
+        defaultFlags: langOf(file) === 'c' ? this.cfg().c.flags : langOf(file) === 'cpp' ? this.cfg().cpp.flags : undefined,
+        defaultJudgeFlags: langOf(file) === 'c' ? this.cfg().c.judgeFlags : langOf(file) === 'cpp' ? this.cfg().cpp.judgeFlags : undefined,
         verdict: vd ? { status: vd.status, text: vd.text, url: vd.url } : undefined,
       },
       compile: { ...s.compile, judgeFlags: st.judgeFlags },
@@ -822,6 +824,8 @@ export class Controller implements vscode.Disposable {
       case 'setting': {
         const patch = { ...m.patch } as Partial<ProblemSettings>;
         if (patch.timeLimitMs !== undefined && !(patch.timeLimitMs > 0)) patch.timeLimitMs = undefined;
+        // An emptied flags box means "the default again".
+        for (const k of ['flags', 'judgeFlagsText'] as const) if (k in patch) patch[k] = patch[k]?.trim() || undefined;
         const compareChanged = ['compare', 'precision', 'checker'].some((k) => k in patch);
         p.updateSettings(patch);
         if (compareChanged) await this.rejudge(s);

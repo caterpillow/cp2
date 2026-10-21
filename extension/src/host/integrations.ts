@@ -9,7 +9,8 @@ import { langOf } from '../core/lang';
 import { resolveSnippet, snippetVars } from '../core/snippet';
 import { Binding, Problem, Store, StoreIndex, VerdictState } from '../core/store';
 import { canSubmit, contestKey, fileStemForIndex, problemKey, ProblemRef, shortProblemId, siteLabel } from '../../../shared/problemId';
-import { BridgeEvent, BridgeState, CMD_BRIDGE_ACK, CMD_BRIDGE_EVENT, CMD_BRIDGE_REQUEST, CMD_BRIDGE_SNIPPET, CMD_BRIDGE_STATE, ContestInfo, ContestTask, ProblemData, SubmitResult, VerdictUpdate } from '../../../shared/protocol';
+import { samplesInSelection } from '../../../shared/pdfSelect';
+import { BridgeEvent, BridgeState, CMD_BRIDGE_ACK, CMD_BRIDGE_EVENT, CMD_BRIDGE_REQUEST, CMD_BRIDGE_SNIPPET, CMD_BRIDGE_STATE, ContestInfo, ContestTask, ProblemData, SampleTest, SubmitResult, VerdictUpdate } from '../../../shared/protocol';
 import type { Controller, Extras } from './controller';
 
 function bindingFromRef(ref: ProblemRef): Binding {
@@ -97,6 +98,8 @@ export class Integrations implements Extras, vscode.Disposable {
   private state: BridgeState = { connected: false, focus: { problem: null, contest: null }, leader: false };
   private bridgeInstalled: boolean | null = null;
   private decorations = new VerdictDecorations();
+  /** Clipboard text that last picked PDF samples, and for which file. */
+  private lastCopied: { text: string; file: string } | null = null;
   private statusItem = vscode.window.createStatusBarItem('cp2.contest', vscode.StatusBarAlignment.Left, 50);
   private problemItem = vscode.window.createStatusBarItem('cp2.problem', vscode.StatusBarAlignment.Left, 51);
   private disposables: vscode.Disposable[] = [];
@@ -243,12 +246,39 @@ export class Integrations implements Extras, vscode.Disposable {
     await this.applyImport(file, data, false);
   }
 
+  /**
+   * A PDF with several problems' samples: only those in the part selected in the browser's PDF viewer (or, when the
+   * viewer can't be asked, the part copied to the clipboard); all of them when nothing of the PDF is selected.
+   */
+  private async pickFromPdf(data: ProblemData, file: string): Promise<{ tests: SampleTest[]; note: string }> {
+    const all = data.tests;
+    if (!data.pdfIndex || all.length < 2) return { tests: all, note: '' };
+    let text = '';
+    let how = 'selected';
+    if (data.pdfSelection?.known) text = data.pdfSelection.text;
+    else {
+      const copied = await Promise.resolve(vscode.env.clipboard.readText()).catch(() => '');
+      // The same copy already used for another file is old news, not a new selection.
+      const stale = this.lastCopied?.text === copied && this.lastCopied.file !== file;
+      if (copied && !stale && samplesInSelection(data.pdfIndex, copied) !== null) {
+        text = copied;
+        how = 'copied';
+        this.lastCopied = { text: copied, file };
+      }
+    }
+    const keep = text ? samplesInSelection(data.pdfIndex, text) : null;
+    if (!keep) return { tests: all, note: '' };
+    if (!keep.length) return { tests: all, note: ` (the ${how} part of the PDF has no samples, so all of them)` };
+    return { tests: keep.map((i) => all[i]), note: ` (${keep.length} of ${all.length}: the ${how} part of the PDF)` };
+  }
+
   private async applyImport(file: string, data: ProblemData, quiet: boolean): Promise<void> {
     // The scrape takes a while: the file may have been moved (Set up, a rename) or deleted meanwhile.
     file = this.c.currentPath(file);
     if (!(await exists(file))) return;
     const p = await this.c.getProblem(file);
-    const tests = data.interactive ? [] : data.tests;
+    const picked = data.interactive ? { tests: [], note: '' } : await this.pickFromPdf(data, file);
+    const tests = picked.tests;
     const idx = await this.c.indexFor(p.store);
     const old = p.meta.binding ? refFromBinding(p.meta.binding) : null;
     const relinked = old && (data.anonymous || problemKey(old) !== problemKey(data.ref)) ? old : null;
@@ -275,7 +305,7 @@ export class Integrations implements Extras, vscode.Disposable {
       idx.save();
       this.c.requestRender(0);
       this.updateStatusBar();
-      const msg = tests.length ? `imported ${tests.length} sample${tests.length === 1 ? '' : 's'} from ${data.name} into ${path.basename(file)}${relinked ? ` (unlinked from ${shortProblemId(relinked)})` : ''}` : `no samples found in ${data.name}${data.note ? `: ${data.note}` : ''}`;
+      const msg = tests.length ? `imported ${tests.length} sample${tests.length === 1 ? '' : 's'} from ${data.name} into ${path.basename(file)}${picked.note}${relinked ? ` (unlinked from ${shortProblemId(relinked)})` : ''}` : `no samples found in ${data.name}${data.note ? `: ${data.note}` : ''}`;
       if (!quiet) {
         if (!tests.length) void vscode.window.showWarningMessage(`cp2: ${msg}`);
         else vscode.window.setStatusBarMessage(`cp2: ${msg}`, 5000);
@@ -301,7 +331,7 @@ export class Integrations implements Extras, vscode.Disposable {
     let msg: string;
     if (data.interactive) msg = `${id} is interactive: linked it, samples not imported`;
     else if (!tests.length && data.note) msg = `linked ${path.basename(file)} to ${id}, but ${data.note}`;
-    else msg = `imported ${tests.length} sample${tests.length === 1 ? '' : 's'} from ${id} into ${path.basename(file)}${relinked ? ` (was linked to ${shortProblemId(relinked)})` : ''}`;
+    else msg = `imported ${tests.length} sample${tests.length === 1 ? '' : 's'} from ${id} into ${path.basename(file)}${picked.note}${relinked ? ` (was linked to ${shortProblemId(relinked)})` : ''}`;
     if (!quiet) {
       if (!tests.length && data.note && !data.interactive) void vscode.window.showWarningMessage(`cp2: ${msg}`);
       else vscode.window.setStatusBarMessage(`cp2: ${msg}`, 5000);

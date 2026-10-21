@@ -24,6 +24,8 @@ export interface BoxOptions {
   onBlockedEdit?: () => void;
   /** Undo / redo from the Edit menu (keys are handled for the whole sidebar). */
   onHistory?: (dir: 'undo' | 'redo') => void;
+  /** Tab / Shift+Tab: true when handled, otherwise focus leaves the box as usual. */
+  onTab?: (shift: boolean) => boolean;
   className?: string;
 }
 
@@ -78,6 +80,7 @@ export class TextBox {
           return true;
         },
       },
+      { key: 'Tab', run: () => !!this.opts.onTab?.(false), shift: () => !!this.opts.onTab?.(true) },
     ]);
     this.view = new EditorView({
       parent,
@@ -174,6 +177,11 @@ export class TextBox {
   }
 
   focus(): void {
+    this.view.focus();
+  }
+
+  focusEnd(): void {
+    this.view.dispatch({ selection: { anchor: this.view.state.doc.length } });
     this.view.focus();
   }
 

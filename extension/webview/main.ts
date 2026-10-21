@@ -119,6 +119,8 @@ interface FieldOpts {
   onRun?: () => void;
   onOpen?: () => void;
   onBlockedEdit?: () => void;
+  /** Tab / Shift+Tab in the box: true when handled (otherwise focus moves on as usual). */
+  onTab?: (shift: boolean) => boolean;
   extraButtons?: () => HTMLElement[];
 }
 
@@ -171,6 +173,7 @@ class Field {
         onRun: this.opts.onRun,
         onBlockedEdit: this.opts.onBlockedEdit,
         onHistory: sendHistory,
+        onTab: this.opts.onTab,
         onChange: (t) => {
           this.lastText = t;
           this.pending?.();
@@ -227,6 +230,11 @@ class Field {
 
   focus(): void {
     this.box?.focus();
+  }
+
+  /** Focus with the cursor at the end (moving between Input and Expected with Tab). */
+  focusEnd(): void {
+    this.box?.focusEnd();
   }
 
   destroy(): void {
@@ -320,6 +328,8 @@ class Card {
       onRun: () => send({ type: 'runCase', key }),
       onOpen: () => send({ type: 'open', key, field: 'in' }),
       onBlockedEdit: () => this.nudgeKeep(),
+      // Tab: on to Expected (Shift+Tab leaves the box as usual).
+      onTab: (shift) => !shift && !this.expected.el.hidden && (this.expected.focusEnd(), true),
     });
     this.expected = new Field(`${key}|ans`, {
       title: 'Expected',
@@ -329,6 +339,8 @@ class Card {
       onRun: () => send({ type: 'runCase', key }),
       onOpen: () => send({ type: 'open', key, field: 'ans' }),
       onBlockedEdit: () => this.nudgeKeep(),
+      // Shift+Tab: back to Input.
+      onTab: (shift) => shift && (this.input.focusEnd(), true),
     });
     this.detail = h('div', { class: 'detail' });
     this.transcript = h('div', { class: 'transcript' });
@@ -923,8 +935,26 @@ function renderSettings(s: ViewState): void {
   }
   const tl = h('input', { type: 'number', min: 1, step: 100, value: st.timeLimitMs ?? '', placeholder: String(p.timeLimitMs), size: 7 });
   tl.addEventListener('change', () => setting({ timeLimitMs: tl.value ? Number(tl.value) : 0 }));
-  const jf = h('input', { type: 'checkbox', checked: st.judgeFlags });
+  const jf = h('input', { type: 'checkbox', checked: st.judgeFlags, title: 'Compile with the judge flags (for tight time limits)' });
   jf.addEventListener('change', () => setting({ judgeFlags: jf.checked }));
+  // Flags for this file; empty means the default (shown greyed). Saved on Enter / leaving the box.
+  const flagsBox = (key: 'flags' | 'judgeFlagsText', placeholder: string, title: string) => {
+    const inp = h('input', { type: 'text', class: 'flags', value: st[key] ?? '', placeholder, title, spellcheck: false });
+    inp.addEventListener('change', () => setting({ [key]: inp.value }));
+    return inp;
+  };
+  const flagRows = p.defaultFlags === undefined
+    ? []
+    : [
+        h('div', { class: 'row' }, h('label', {}, 'Flags'), flagsBox('flags', p.defaultFlags, 'Compile flags for this file (empty: the cp2.cpp.flags / cp2.c.flags setting)')),
+        h(
+          'div',
+          { class: 'row' },
+          h('label', { title: 'Compile with these instead of the flags above (to check tight time limits)' }, 'Judge flags'),
+          jf,
+          flagsBox('judgeFlagsText', p.defaultJudgeFlags ?? '', 'Judge flags for this file (empty: the cp2.cpp.judgeFlags / cp2.c.judgeFlags setting)'),
+        ),
+      ];
   settingsEl.replaceChildren(
     h('div', { class: 'settings-head' }, icon('gear'), h('span', { class: 'settings-title' }, 'Settings'), h('span', { class: 'settings-file', title: s.file.rel }, s.file.name), btn(null, 'close', closeSettings, { title: 'Close (Esc)', cls: 'tiny' })),
     h(
@@ -934,7 +964,7 @@ function renderSettings(s: ViewState): void {
       typeRow,
       h('div', { class: 'row top' }, h('label', {}, 'Compile with'), cw),
       h('div', { class: 'row' }, h('label', {}, 'Time limit'), tl, h('span', { class: 'muted' }, 'ms')),
-      h('div', { class: 'row' }, h('label', {}, ''), h('label', { class: 'check', title: 'Compile with judge-like flags (-O2, no sanitizers) to check tight time limits' }, jf, 'Judge flags (‑O2, no sanitizers)')),
+      ...flagRows,
     ),
   );
 }

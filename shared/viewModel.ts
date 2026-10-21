@@ -15,6 +15,8 @@ export interface ProblemSettingsVM {
   compileWith: string[];
   judgeFlags: boolean;
   timeLimitMs?: number;
+  flags?: string;
+  judgeFlagsText?: string;
 }
 
 /**
@@ -156,6 +158,9 @@ export interface ViewState {
     compileCandidates: string[];
     checkerExists: boolean;
     judgeExists: boolean;
+    /** Compile flags used when the file sets none (C / C++ only). */
+    defaultFlags?: string;
+    defaultJudgeFlags?: string;
     verdict?: { status: 'judging' | 'accepted' | 'rejected' | 'partial'; text: string; url?: string };
   } | null;
   compile: { state: 'idle' | 'compiling' | 'ok' | 'error'; output?: string; judgeFlags: boolean; pch?: boolean };

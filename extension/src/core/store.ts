@@ -34,6 +34,10 @@ export interface ProblemSettings {
   /** Compile with judge-like flags (-O2, no sanitizers). */
   judgeFlags: boolean;
   timeLimitMs?: number;
+  /** This file's compile flags instead of cp2.cpp.flags / cp2.c.flags. */
+  flags?: string;
+  /** ...and instead of the judge flags. */
+  judgeFlagsText?: string;
 }
 
 export const DEFAULT_SETTINGS: ProblemSettings = {
@@ -474,6 +478,33 @@ export class Problem {
     this.placeAfter(storedKey(c.id), afterKey);
     this.scheduleSave();
     return c;
+  }
+
+  /**
+   * Copies another problem's test cases (and the settings that matter for running them, but not its time limit or
+   * judge-flags switch): the brute created by a stress Set up starts with the solution's cases.
+   */
+  async copyCasesFrom(src: Problem): Promise<void> {
+    await this.store.ensure();
+    await mkdirp(this.dir);
+    const keys = new Map<string, string>();
+    for (const c of src.meta.cases) {
+      const id = randomId(8);
+      for (const kind of ['in', 'ans'] as const) {
+        const from = src.caseFile(c.id, kind);
+        if (await exists(from)) await fsp.copyFile(from, this.caseFile(id, kind));
+        else await atomicWrite(this.caseFile(id, kind), '');
+      }
+      this.meta.cases.push({ ...c, id });
+      keys.set(storedKey(c.id), storedKey(id));
+    }
+    const key = (k: string) => keys.get(k) ?? k;
+    this.meta.order = src.meta.order.map(key);
+    this.meta.pinned = src.meta.pinned.map(key);
+    this.meta.shownFiles = [...src.meta.shownFiles];
+    const { timeLimitMs: _tl, judgeFlags: _jf, ...run } = src.meta.settings;
+    this.meta.settings = { ...this.meta.settings, ...run };
+    await this.flush();
   }
 
   private placeAfter(k: string, afterKey?: string): void {
