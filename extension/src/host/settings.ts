@@ -57,6 +57,7 @@ export function readConfig(scope?: vscode.Uri): Cp2Config {
       maxIterations: pick(scope, 'stress.maxIterations', null, 10000),
       helperTimeoutMs: pick(scope, 'stress.helperTimeoutMs', null, 10000),
       genTemplate: pick(scope, 'stress.genTemplate', null, 'templates/templategen.cpp'),
+      shrinkSeconds: pick(scope, 'stress.shrinkSeconds', null, 0.5),
     },
     helperFlags: pick(scope, 'helperFlags', null, DEFAULT_FLAGS.helper),
     inlineBytes: pick(scope, 'inlineKb', null, 1024) * 1024,

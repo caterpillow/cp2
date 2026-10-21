@@ -20,6 +20,8 @@ export interface BoxOptions {
   wrap?: boolean;
   onChange?: (text: string) => void;
   onRun?: () => void;
+  /** Typing, pasting or deleting in a read-only box. */
+  onBlockedEdit?: () => void;
   className?: string;
 }
 
@@ -90,6 +92,17 @@ export class TextBox {
           opts.placeholder ? cmPlaceholder(opts.placeholder) : [],
           marksField,
           theme,
+          EditorView.domEventHandlers({
+            keydown: (e, view) => {
+              if (!view.state.readOnly || e.ctrlKey || e.metaKey || e.altKey) return false;
+              if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Enter') this.opts.onBlockedEdit?.();
+              return false;
+            },
+            paste: (_e, view) => {
+              if (view.state.readOnly) this.opts.onBlockedEdit?.();
+              return false;
+            },
+          }),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !this.suppress) this.opts.onChange?.(u.state.doc.toString());
           }),

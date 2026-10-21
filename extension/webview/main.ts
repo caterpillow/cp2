@@ -103,6 +103,7 @@ interface FieldOpts {
   onEdit?: (text: string) => void;
   onRun?: () => void;
   onOpen?: () => void;
+  onBlockedEdit?: () => void;
   extraButtons?: () => HTMLElement[];
 }
 
@@ -147,6 +148,7 @@ class Field {
         placeholder: this.opts.placeholder,
         wrap: wrapOn(this.kind),
         onRun: this.opts.onRun,
+        onBlockedEdit: this.opts.onBlockedEdit,
         onChange: (t) => {
           this.lastText = t;
           this.pending?.();
@@ -278,6 +280,7 @@ class Card {
       onEdit: (t) => send({ type: 'edit', key, field: 'in', text: t, file: currentFile }),
       onRun: () => send({ type: 'runCase', key }),
       onOpen: () => send({ type: 'open', key, field: 'in' }),
+      onBlockedEdit: () => this.nudgeKeep(),
     });
     this.expected = new Field(`${key}|ans`, {
       title: 'Expected',
@@ -286,6 +289,7 @@ class Card {
       onEdit: (t) => send({ type: 'edit', key, field: 'ans', text: t, file: currentFile }),
       onRun: () => send({ type: 'runCase', key }),
       onOpen: () => send({ type: 'open', key, field: 'ans' }),
+      onBlockedEdit: () => this.nudgeKeep(),
     });
     this.detail = h('div', { class: 'detail' });
     this.transcript = h('div', { class: 'transcript' });
@@ -315,6 +319,15 @@ class Card {
     this.el.classList.toggle('collapsed', collapsed.has(this.key));
   }
 
+  /** Someone typed into a read-only text-file case: point at Keep. */
+  private nudgeKeep(): void {
+    const keep = this.actions.querySelector<HTMLElement>('.keep');
+    if (!keep) return;
+    keep.classList.remove('nudge');
+    void keep.offsetWidth; // restart the animation
+    keep.classList.add('nudge');
+  }
+
   flush(): void {
     this.input.flush();
     this.expected.flush();
@@ -339,7 +352,7 @@ class Card {
     }
     this.actions.replaceChildren(
       ...[
-        vm.origin === 'file' ? btn('Keep', 'save', () => send({ type: 'keep', key: k }), { title: 'Copy this case into a manual case (the file can change)', cls: 'tiny text' }) : null,
+        vm.origin === 'file' ? btn('Keep', 'save', () => send({ type: 'keep', key: k }), { title: 'Text-file cases are read-only. Keep copies this one into an editable case.', cls: 'tiny text keep' }) : null,
         r?.diffExpected && r.received ? btn(null, 'diff', () => send({ type: 'diff', key: k }), { title: 'Open expected vs received in a diff editor', cls: 'tiny' }) : null,
         btn(null, vm.pinned ? 'pinned' : 'pin', () => send({ type: 'pin', key: k, pinned: !vm.pinned }), { title: vm.pinned ? 'Unpin' : 'Pin to top', cls: 'tiny' }),
         btn(null, 'play', () => send({ type: 'runCase', key: k }), { title: 'Run this case (Ctrl+Enter in a box)', cls: 'tiny' }),
@@ -351,6 +364,8 @@ class Card {
 
     // input / expected
     this.input.update(vm.input);
+    this.input.setClass('locked', vm.origin === 'file');
+    this.expected.setClass('locked', vm.origin === 'file');
     if (vm.expected) {
       this.expected.el.hidden = false;
       const marks: Mark[] = r?.diffExpected ? [{ line: r.diffExpected.line, col: r.diffExpected.col, len: r.diffExpected.len, cls: 'diff', span: true }] : [];

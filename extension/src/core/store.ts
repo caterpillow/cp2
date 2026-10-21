@@ -444,11 +444,11 @@ export interface StressPicks {
 }
 
 export interface DirMeta {
-  version: 1;
+  version: 2;
   wa: StressPicks;
   re: StressPicks;
-  /** Index into SHRINK_STEPS for each mode. */
-  shrink: { wa: number; re: number };
+  /** Index into SHRINK_STEPS for each mode; unset until the slider is moved (then cp2.stress.shrinkSeconds applies). */
+  shrink: { wa?: number; re?: number };
   open: { wa: boolean; re: boolean };
   /** mtime of the `ans` file last written by WA stress (lets RE stress clear it safely). */
   ansFromStress?: number;
@@ -456,8 +456,17 @@ export interface DirMeta {
 
 export const SHRINK_STEPS = [0, 0.2, 0.5, 1, 2, 5, 10];
 
+/** The slider step closest to `seconds`. */
+export function shrinkIndex(seconds: number): number {
+  let best = 0;
+  SHRINK_STEPS.forEach((s, i) => {
+    if (Math.abs(s - seconds) < Math.abs(SHRINK_STEPS[best] - seconds)) best = i;
+  });
+  return best;
+}
+
 export function emptyDirMeta(): DirMeta {
-  return { version: 1, wa: {}, re: {}, shrink: { wa: 0, re: 0 }, open: { wa: false, re: false } };
+  return { version: 2, wa: {}, re: {}, shrink: {}, open: { wa: false, re: false } };
 }
 
 export async function loadDirMeta(store: Store, dir: string): Promise<DirMeta> {
@@ -467,7 +476,13 @@ export async function loadDirMeta(store: Store, dir: string): Promise<DirMeta> {
     Object.assign(m, raw);
     m.wa = { ...(raw.wa ?? {}) };
     m.re = { ...(raw.re ?? {}) };
-    m.shrink = { wa: 0, re: 0, ...(raw.shrink ?? {}) };
+    m.shrink = { ...(raw.shrink ?? {}) };
+    if ((raw.version ?? 1) < 2) {
+      // Version 1 saved the old default (0) for every folder: treat it as "never moved".
+      if (m.shrink.wa === 0) delete m.shrink.wa;
+      if (m.shrink.re === 0) delete m.shrink.re;
+      m.version = 2;
+    }
     m.open = { wa: false, re: false, ...(raw.open ?? {}) };
   }
   return m;

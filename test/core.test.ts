@@ -8,7 +8,7 @@ import { matchFileCases } from '../extension/src/core/fileCases';
 import { splitArgs } from '../extension/src/core/fsutil';
 import { findLegacyProb, readLegacyProb } from '../extension/src/core/legacy';
 import { resolveSnippet } from '../extension/src/core/snippet';
-import { displayOrder, Problem, Store, StoreLocator, storedKey } from '../extension/src/core/store';
+import { displayOrder, loadDirMeta, Problem, saveDirMeta, shrinkIndex, Store, StoreLocator, storedKey } from '../extension/src/core/store';
 import { parseContestUrl, parseProblemUrl, problemKey, submitPageUrl } from '../shared/problemId';
 import { createHash } from 'node:crypto';
 
@@ -110,6 +110,21 @@ describe('urls', () => {
 });
 
 describe('store', () => {
+  it('folder stress settings: old saved 0 means the slider was never moved', async () => {
+    const base = await tmpdir();
+    const store = new Store(base);
+    const dir = path.join(base, 'x');
+    await fsp.mkdir(path.dirname(store.dirMetaFile(dir)), { recursive: true });
+    await fsp.writeFile(store.dirMetaFile(dir), JSON.stringify({ version: 1, wa: { sus: 'x.cpp' }, re: {}, shrink: { wa: 0, re: 4 }, open: { wa: true, re: false } }));
+    const m = await loadDirMeta(store, dir);
+    assert.deepEqual({ ...m.shrink }, { re: 4 });
+    assert.equal(m.wa.sus, 'x.cpp');
+    m.shrink.wa = 0;
+    await saveDirMeta(store, dir, m);
+    assert.deepEqual((await loadDirMeta(store, dir)).shrink, { wa: 0, re: 4 }, 'a 0 chosen now is kept');
+    assert.deepEqual([0, 0.5, 0.7, 3, 100].map(shrinkIndex), [0, 2, 2, 4, 6]);
+  });
+
   it('stores cases, keeps the imported block in place and carries pins by sample', async () => {
     const base = await tmpdir();
     const file = path.join(base, 'x', 'a.cpp');

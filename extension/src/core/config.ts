@@ -27,6 +27,8 @@ export interface Cp2Config {
     maxIterations: number;
     helperTimeoutMs: number;
     genTemplate: string;
+    /** Default for the "smaller" slider in folders where it hasn't been moved. */
+    shrinkSeconds: number;
   };
   /** Flags for checkers and judges. */
   helperFlags: string;

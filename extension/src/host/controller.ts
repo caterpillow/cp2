@@ -439,8 +439,10 @@ export class Controller implements vscode.Disposable {
     }
     const res = this.resultFor(s, key);
     const inline = cfg.inlineBytes;
-    const input = await s.fileText(`${key}|in`, files.input, inline, true);
-    const expected = interactive ? null : await s.fileText(`${key}|ans`, files.expected, inline, true, res?.diff?.expectedLine);
+    // Text-file cases are read-only here: Keep copies them into an editable case.
+    const editable = origin !== 'file';
+    const input = await s.fileText(`${key}|in`, files.input, inline, editable);
+    const expected = interactive ? null : await s.fileText(`${key}|ans`, files.expected, inline, editable, res?.diff?.expectedLine);
     const vm: CaseVM = {
       key,
       origin,
@@ -451,7 +453,7 @@ export class Controller implements vscode.Disposable {
       input,
       expected,
       expectedMissing: !interactive && origin === 'file' && !files.expected,
-      expectedHint: !interactive && origin === 'file' && !files.expected ? `no answer file — typing here creates ${path.basename(files.candidate!)}` : undefined,
+      expectedHint: !interactive && origin === 'file' && !files.expected ? `no answer file (${path.basename(files.candidate!)}) — press Keep to make an editable copy` : undefined,
     };
     if (res) vm.result = await this.resultVM(s, key, res);
     return vm;
@@ -719,19 +721,15 @@ export class Controller implements vscode.Disposable {
         if (isFileKey(m.key)) p.hideFile(keyId(m.key));
         return this.requestRender();
       case 'edit': {
+        if (!isStoredKey(m.key)) return; // text-file cases are read-only (Keep makes an editable copy)
         const files = this.caseFiles(s, m.key, listing);
         if (!files) return;
-        let target = m.field === 'in' ? files.input : files.expected;
-        if (m.field === 'ans' && !target) target = files.candidate ?? null;
+        const target = m.field === 'in' ? files.input : files.expected;
         if (!target) return;
         this.dirs.noteOwnWrite(target);
         await atomicWrite(target, m.text);
         s.setTextFromWebview(`${m.key}|${m.field}`, m.text, target);
-        if (isStoredKey(m.key)) p.scheduleSave();
-        if (m.field === 'ans' && !files.expected) {
-          this.dirs.invalidate(path.dirname(target));
-          s.invalidateText(`${m.key}|ans`);
-        }
+        p.scheduleSave();
         const r = s.results.get(m.key);
         if (r?.outFile && m.field === 'ans' && !r.transcript && ['AC', 'WA', 'RAN'].includes(r.verdict)) {
           const j = await this.judgeOutput(s, { input: files.input, expected: target }, r.outFile, null, r.stderr ?? '');

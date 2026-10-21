@@ -7,7 +7,7 @@ import { atomicWrite, copyFileP, exists, readText, sha1, statOrNull } from '../c
 import { isSourceFile } from '../core/lang';
 import { classifyRun, describeExit, runProcess } from '../core/runner';
 import { resolveSnippet, snippetVars } from '../core/snippet';
-import { DirMeta, loadDirMeta, saveDirMeta, SHRINK_STEPS } from '../core/store';
+import { DirMeta, loadDirMeta, saveDirMeta, SHRINK_STEPS, shrinkIndex } from '../core/store';
 import { StressConfig, StressRun, StressStatus } from '../core/stress';
 import { autofill, defaultGen, planSetup, Slot } from '../core/stressFiles';
 import type { FromWebview, SlotVM, StressSectionVM, StressStatusVM } from '../../../shared/viewModel';
@@ -88,7 +88,7 @@ export class StressHost {
       out[mode] = {
         open: meta.open[mode],
         slots,
-        shrink: meta.shrink[mode] ?? 0,
+        shrink: this.shrinkOf(meta, mode),
         canRun: !disabled && !missing.length,
         reason,
         needsSetup: !disabled && (mode === 'wa' ? !has(s.brute.value) || !has(s.gen.value) : !has(s.gen.value)),
@@ -100,6 +100,11 @@ export class StressHost {
       };
     }
     return out;
+  }
+
+  /** The folder's slider position, or the cp2.stress.shrinkSeconds default if it was never moved. */
+  private shrinkOf(meta: DirMeta, mode: 'wa' | 're'): number {
+    return meta.shrink[mode] ?? shrinkIndex(this.c.cfg().stress.shrinkSeconds);
   }
 
   async onMessage(active: string, m: Extract<FromWebview, { type: `stress${string}` }>): Promise<void> {
@@ -281,7 +286,7 @@ export class StressHost {
       precision: st.precision,
       workers: Math.max(1, cfg.stress.workers),
       maxIterations: cfg.stress.maxIterations,
-      shrinkMs: (SHRINK_STEPS[meta.shrink[mode] ?? 0] ?? 0) * 1000,
+      shrinkMs: SHRINK_STEPS[this.shrinkOf(meta, mode)] * 1000,
       susTimeLimitMs: this.c.timeLimit(sp),
       helperTimeoutMs: cfg.stress.helperTimeoutMs,
       limits: this.c.limits(),

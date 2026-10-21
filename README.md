@@ -7,7 +7,8 @@ sends problems from the judge to VS Code. Inspired by [CPH](https://github.com/a
 - **No "create problem" step.** Every C++ / C / Python file you open is a problem. Its test cases live in `.cp2/` at
   the workspace root as plain `.in` / `.ans` files, so very large cases stay fast.
 - **Text files are test cases.** `in`, `in3`, `a.in`, `a-in.txt`, `wormin.txt`, … next to your code show up
-  automatically, paired with `ans` / `out` / `output` / `expected`.
+  automatically, paired with `ans` / `out` / `output` / `expected`. They're read-only in the sidebar: **Keep** copies
+  one into an editable case (the stress test's `in` / `ans` too).
 - **Sidebar:** drag to reorder, pin to the top, first difference highlighted, line numbers, line wrap toggle,
   comparison modes (standard, first line, precision, custom checker), stdio-interactive problems with a judge or a
   chat-style manual run, extra files to compile with (graders, headers), and a "judge flags" mode for tight time limits.
@@ -122,7 +123,8 @@ Reload VS Code after installing. The cp2 icon appears in the activity bar.
   The sidebar tells you when importing will re-link the file.
 - **Submit** goes to the problem the file is linked to. It asks first if the last run failed or the file changed since.
 - **Stress testing:** the two sections at the bottom of the sidebar. **Set up** turns `x.cpp` into `x/x.cpp`,
-  `x/xbrute.cpp` and `x/gen.cpp`. Generated tests go to `in` / `ans`.
+  `x/xbrute.cpp` and `x/gen.cpp`. Generated tests go to `in` / `ans`. After a failure, cp2 keeps looking for a
+  smaller failing test for as long as the **smaller** slider says (default `cp2.stress.shrinkSeconds`, 0.5 s).
 - **Compare modes** live in the ⚙ panel (per file). A custom checker is run as `checker <input> <output> <expected>`
   (testlib order), and exit code 0 means accepted.
 - **Interactive judges** receive the test case on stdin first, then the conversation (or as `argv[1]`, testlib style).
@@ -137,6 +139,7 @@ Reload VS Code after installing. The cp2 icon appears in the activity bar.
 | `cp2.timeLimitMs` | CPH's `cph.general.timeOut`, then 3000 (imported problems use their own limit) |
 | `cp2.stackMb` | 1024 |
 | `cp2.stress.workers`, `cp2.stress.maxIterations` | 8, 10000 |
+| `cp2.stress.shrinkSeconds` | 0.5 (time spent looking for a smaller failing test; the slider overrides it per folder) |
 | `cp2.contest.folders` | `codeforces/${contestId}`, `atcoder/beginner/${hundreds}xx/${number}`, `dmoj/${contestId}`, … |
 | `cp2.submit.languages` | regexes choosing the site's language, e.g. GNU G++23 → 20 → 17 |
 | `cp2.newFile.snippet` | `tmpcf` (looked up in your VS Code user snippets) |

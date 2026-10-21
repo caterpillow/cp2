@@ -121,13 +121,19 @@ describe('controller', () => {
     assert.equal(s.cases[1].result?.verdict, 'AC');
   });
 
-  it('typing into a missing answer box creates the answer file', async () => {
+  it('text-file cases are read-only', async () => {
+    const before = await fsp.readFile(path.join(root, 'p/in'), 'utf8');
+    await h.c.onMessage({ type: 'edit', key: 'f:in', field: 'in', text: '99\n', file: path.join(root, 'p/a.cpp') });
     await h.c.onMessage({ type: 'edit', key: 'f:in2', field: 'ans', text: '2\n', file: path.join(root, 'p/a.cpp') });
-    assert.equal(await fsp.readFile(path.join(root, 'p/ans2'), 'utf8'), '2\n');
+    assert.equal(await fsp.readFile(path.join(root, 'p/in'), 'utf8'), before);
+    assert.ok(!fs.existsSync(path.join(root, 'p/ans2')), 'no answer file is created');
     const s = await h.state();
     const c = s.cases.find((x) => x.key === 'f:in2')!;
-    assert.equal(c.expectedMissing, false);
-    assert.equal(c.result?.verdict, 'AC');
+    assert.equal(c.input.editable, false);
+    assert.equal(c.expected?.editable, false);
+    assert.equal(c.expectedMissing, true);
+    assert.match(c.expectedHint ?? '', /Keep/);
+    assert.equal(s.cases[0].input.editable, true, 'stored cases stay editable');
   });
 
   it('pins, reorders, keeps and hides', async () => {
@@ -232,6 +238,7 @@ describe('stress', () => {
       ],
     );
     assert.equal(wa.canRun, true, wa.reason);
+    assert.equal(wa.shrink, 2, 'slider starts at cp2.stress.shrinkSeconds (0.5 s)');
     await h.c.stress.onMessage(moved, { type: 'stressShrink', mode: 'wa', index: 3 });
     await h.c.stress.onMessage(moved, { type: 'stressRun', mode: 'wa' });
     s = await h.waitFor((x) => x.stress.wa.status?.state === 'found' || x.stress.wa.status?.state === 'error', 60000);
@@ -242,6 +249,7 @@ describe('stress', () => {
     const inCase = s.cases.find((c) => c.key === 'f:in')!;
     assert.equal(inCase.result?.verdict, 'WA');
     assert.equal(inCase.stress, true);
+    assert.equal(inCase.input.editable, false, 'the stress case is read-only too');
     assert.ok(inCase.result?.diffReceived);
     h.c.dispose();
     h.integ.dispose();

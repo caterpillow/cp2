@@ -1,7 +1,7 @@
 {
   "name": "cp2-monorepo",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "cp2 — Competitive Programming Helper 2 (VS Code extension, UI bridge, browser extension)",
   "scripts": {
     "build": "node scripts/build.mjs",
