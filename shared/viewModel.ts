@@ -46,6 +46,8 @@ export interface TranscriptLine {
 
 export interface ResultVM {
   verdict: Verdict;
+  /** When the result was produced: a new value means a new run finished. */
+  at: number;
   timeMs?: number;
   /** Checker / judge message, exit description, ... */
   detail?: string;

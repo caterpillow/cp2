@@ -61,6 +61,7 @@ function debounce(fn: () => void, ms: number) {
 // ---------------- persistent UI bits ----------------
 
 const saved: { collapsed?: string[]; wrap?: Record<string, boolean> } = vscode.getState() ?? {};
+/** `${file}|${case key}` of collapsed cases (keys like f:in repeat across files). */
 const collapsed = new Set<string>(saved.collapsed ?? []);
 // Line wrap per kind of box (input, expected, received, stderr, ...): on by default except input.
 const wrapPrefs: Record<string, boolean> = saved.wrap ?? {};
@@ -88,8 +89,11 @@ const manualEl = h('div', { id: 'manual' });
 const casesEl = h('div', { id: 'cases' });
 const emptyEl = h('div', { id: 'empty' });
 const footer = h('footer', { id: 'stress' });
-scroll.append(warnEl, settingsEl, compileEl, manualEl, casesEl, emptyEl);
-app.append(hdr, scroll, footer);
+// The settings panel floats over the top of the case list, so it stays put while the cases scroll.
+const main = h('div', { id: 'main' });
+scroll.append(warnEl, compileEl, manualEl, casesEl, emptyEl);
+main.append(scroll, settingsEl);
+app.append(hdr, main, footer);
 
 let state: ViewState | null = null;
 let currentFile = '';
@@ -222,6 +226,9 @@ const VERDICTS: Record<Verdict, [string, string]> = {
   STOPPED: ['stopped', 'neutral'],
 };
 
+/** Card colour per verdict. */
+const OUTCOME: Partial<Record<Verdict, 'pass' | 'fail' | 'warn'>> = { AC: 'pass', WA: 'fail', RE: 'fail', TLE: 'fail', OLE: 'fail', CE: 'fail', ERR: 'fail', NOCHECK: 'warn' };
+
 // ---------------- transcript (interactive) ----------------
 
 function transcriptView(lines: TranscriptLine[], el: HTMLElement): void {
@@ -265,14 +272,18 @@ class Card {
   private transcript: HTMLElement;
   private interleave: Field | null = null;
   vm!: CaseVM;
+  /** File the card last showed (cards are reused across files) and the time of its last result. */
+  private file = '';
+  private lastAt?: number;
 
   constructor(readonly key: string) {
     const grip = h('span', { class: 'grip', title: 'Drag to reorder' }, icon('gripper'));
+    const chev = h('span', { class: 'chev', title: 'Collapse / expand' }, icon('chevron-down'));
     this.label = h('span', { class: 'case-label' });
     this.badge = h('span', { class: 'badge' });
     this.time = h('span', { class: 'time' });
     this.actions = h('span', { class: 'case-actions' });
-    this.head = h('div', { class: 'case-head' }, grip, this.label, this.badge, this.time, this.actions);
+    this.head = h('div', { class: 'case-head' }, grip, chev, this.label, this.badge, this.time, this.actions);
     this.input = new Field(`${key}|in`, {
       title: 'Input',
       editable: true,
@@ -307,16 +318,34 @@ class Card {
       dragKey = null;
       clearDropMarks();
     });
-    this.label.addEventListener('click', () => {
-      if (collapsed.has(key)) collapsed.delete(key);
-      else collapsed.add(key);
-      persist();
-      this.applyCollapsed();
-    });
+    for (const el of [chev, this.label]) el.addEventListener('click', () => this.setCollapsed(!collapsed.has(this.ck)));
+  }
+
+  private get ck(): string {
+    return `${this.file}|${this.key}`;
+  }
+
+  setCollapsed(on: boolean): void {
+    if (on === collapsed.has(this.ck)) return;
+    if (on) collapsed.add(this.ck);
+    else collapsed.delete(this.ck);
+    persist();
+    this.applyCollapsed();
   }
 
   private applyCollapsed(): void {
-    this.el.classList.toggle('collapsed', collapsed.has(this.key));
+    this.el.classList.toggle('collapsed', collapsed.has(this.ck));
+  }
+
+  /** Like CPH: a finished run folds up passing cases and opens failing ones. */
+  private autoCollapse(r: ResultVM | undefined, sameFile: boolean): void {
+    const fresh = sameFile && !!r && r.at !== this.lastAt;
+    this.lastAt = r?.at;
+    if (!fresh) return;
+    const o = OUTCOME[r!.verdict];
+    // Not while typing in this case (Ctrl+Enter runs it).
+    if (o === 'pass' && !this.el.contains(document.activeElement)) this.setCollapsed(true);
+    else if (o === 'fail' || o === 'warn' || r!.verdict === 'RAN') this.setCollapsed(false);
   }
 
   /** Someone typed into a read-only text-file case: point at Keep. */
@@ -336,7 +365,11 @@ class Card {
   update(vm: CaseVM): void {
     this.vm = vm;
     const k = vm.key;
-    this.el.className = `case origin-${vm.origin}${vm.pinned ? ' pinned' : ''}${vm.stress ? ' stress' : ''}`;
+    const sameFile = this.file === currentFile;
+    this.file = currentFile;
+    const outcome = vm.result && OUTCOME[vm.result.verdict];
+    this.el.className = `case origin-${vm.origin}${vm.pinned ? ' pinned' : ''}${vm.stress ? ' stress' : ''}${outcome ? ` vd-${outcome}` : ''}`;
+    this.autoCollapse(vm.result, sameFile);
     this.applyCollapsed();
     this.label.replaceChildren(vm.pinned ? icon('pinned') : '', h('span', {}, vm.label), vm.files && vm.files !== vm.label ? h('span', { class: 'files' }, vm.files.slice(vm.label.length)) : '', vm.stress ? h('span', { class: 'tag' }, 'stress') : '');
     const r = vm.result;
@@ -439,7 +472,7 @@ class Card {
   }
 
   focusInput(): void {
-    this.el.classList.remove('collapsed');
+    this.setCollapsed(false);
     this.input.focus();
   }
 
@@ -582,15 +615,21 @@ function setting(patch: Partial<ProblemSettingsVM>): void {
   send({ type: 'setting', patch });
 }
 
+let settingsSig = '';
 function renderSettings(s: ViewState): void {
-  if (!s.problem || !s.ui.settingsOpen) {
+  if (!s.problem || !s.file || !s.ui.settingsOpen) {
     settingsEl.replaceChildren();
     settingsEl.hidden = true;
+    settingsSig = '';
     return;
   }
   settingsEl.hidden = false;
   const p = s.problem;
   const st = p.settings;
+  // Rebuilding on every render (runs update the state a lot) would eat half-typed values.
+  const sig = JSON.stringify([s.file.path, st, p.dirFiles, p.compileCandidates, p.checkerExists, p.judgeExists, p.timeLimitMs]);
+  if (sig === settingsSig) return;
+  settingsSig = sig;
   const fileOpts = (cur: string): [string, string][] => {
     const set = new Set([...p.dirFiles, cur]);
     return [...set].sort().map((f) => [f, f]);
@@ -666,13 +705,25 @@ function renderSettings(s: ViewState): void {
   const jf = h('input', { type: 'checkbox', checked: st.judgeFlags });
   jf.addEventListener('change', () => setting({ judgeFlags: jf.checked }));
   settingsEl.replaceChildren(
-    compareRow,
-    typeRow,
-    h('div', { class: 'row top' }, h('label', {}, 'Compile with'), cw),
-    h('div', { class: 'row' }, h('label', {}, 'Time limit'), tl, h('span', { class: 'muted' }, 'ms')),
-    h('div', { class: 'row' }, h('label', {}, ''), h('label', { class: 'check', title: 'Compile with judge-like flags (-O2, no sanitizers) to check tight time limits' }, jf, 'Judge flags (‑O2, no sanitizers)')),
+    h('div', { class: 'settings-head' }, icon('gear'), h('span', { class: 'settings-title' }, 'Settings'), h('span', { class: 'settings-file', title: s.file.rel }, s.file.name), btn(null, 'close', closeSettings, { title: 'Close (Esc)', cls: 'tiny' })),
+    h(
+      'div',
+      { class: 'settings-body' },
+      compareRow,
+      typeRow,
+      h('div', { class: 'row top' }, h('label', {}, 'Compile with'), cw),
+      h('div', { class: 'row' }, h('label', {}, 'Time limit'), tl, h('span', { class: 'muted' }, 'ms')),
+      h('div', { class: 'row' }, h('label', {}, ''), h('label', { class: 'check', title: 'Compile with judge-like flags (-O2, no sanitizers) to check tight time limits' }, jf, 'Judge flags (‑O2, no sanitizers)')),
+    ),
   );
 }
+
+function closeSettings(): void {
+  if (state?.ui.settingsOpen) send({ type: 'toggleSettings', open: false });
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !settingsEl.hidden) closeSettings();
+});
 
 // ---------------- compile box & warnings ----------------
 

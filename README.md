@@ -9,7 +9,8 @@ sends problems from the judge to VS Code. Inspired by [CPH](https://github.com/a
 - **Text files are test cases.** `in`, `in3`, `a.in`, `a-in.txt`, `wormin.txt`, … next to your code show up
   automatically, paired with `ans` / `out` / `output` / `expected`. They're read-only in the sidebar: **Keep** copies
   one into an editable case (the stress test's `in` / `ans` too).
-- **Sidebar:** drag to reorder, pin to the top, first difference highlighted, line numbers, line wrap toggle,
+- **Sidebar:** cases turn green or red, and after a run the passing ones fold up (like CPH). Drag to reorder, pin to
+  the top, first difference highlighted, line numbers, line wrap toggle,
   comparison modes (standard, first line, precision, custom checker), stdio-interactive problems with a judge or a
   chat-style manual run, extra files to compile with (graders, headers), and a "judge flags" mode for tight time limits.
 - **Stress testing** (WA and RE) with sus / brute / gen pickers, parallel workers, and a search for a smaller failing test.
@@ -125,7 +126,7 @@ Reload VS Code after installing. The cp2 icon appears in the activity bar.
 - **Stress testing:** the two sections at the bottom of the sidebar. **Set up** turns `x.cpp` into `x/x.cpp`,
   `x/xbrute.cpp` and `x/gen.cpp`. Generated tests go to `in` / `ans`. After a failure, cp2 keeps looking for a
   smaller failing test for as long as the **smaller** slider says (default `cp2.stress.shrinkSeconds`, 0.5 s).
-- **Compare modes** live in the ⚙ panel (per file). A custom checker is run as `checker <input> <output> <expected>`
+- **Compare modes** live in the ⚙ panel (per file), which floats at the top of the sidebar (Esc closes it). A custom checker is run as `checker <input> <output> <expected>`
   (testlib order), and exit code 0 means accepted.
 - **Interactive judges** receive the test case on stdin first, then the conversation (or as `argv[1]`, testlib style).
   Exit 0 = accepted.
