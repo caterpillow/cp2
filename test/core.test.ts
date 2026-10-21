@@ -123,6 +123,26 @@ describe('store', () => {
     assert.equal('hiddenFiles' in p.meta, false);
   });
 
+  it('sweeps old trash across the whole store once', async () => {
+    const base = await tmpdir();
+    const store = new Store(base);
+    const old = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    const files: string[] = [];
+    for (const rel of ['cases/a/x.cpp/.trash/1.in', 'cases/a/b/y.cpp/.trash/2.ans', 'cases/z.cpp/.trash/3.in']) {
+      const f = path.join(store.root, ...rel.split('/'));
+      await fsp.mkdir(path.dirname(f), { recursive: true });
+      await fsp.writeFile(f, 'x');
+      files.push(f);
+    }
+    for (const f of files.slice(0, 2)) await fsp.utimes(f, old, old);
+    await store.sweepTrash();
+    assert.deepEqual(
+      files.map((f) => fs.existsSync(f)),
+      [false, false, true],
+    );
+    assert.equal(fs.existsSync(path.join(store.root, 'cases/a/x.cpp/.trash')), false, 'empty trash folders go too');
+  });
+
   it('deleted and replaced cases go to the trash, come back with their files, and old trash is cleared', async () => {
     const base = await tmpdir();
     const file = path.join(base, 'a.cpp');
@@ -144,7 +164,7 @@ describe('store', () => {
     const old = p.meta.cases[0].id;
     await p.replaceImported([{ input: 'u', output: 'v' }]);
     assert.ok(fs.existsSync(path.join(p.dir, '.trash', `${old}.in`)), 'replaced samples are trashed too');
-    // Trash older than a week goes when the problem is next loaded.
+    // Trash older than a day goes when the problem is next loaded.
     const long = new Date(Date.now() - 8 * 24 * 3600 * 1000);
     await fsp.utimes(path.join(p.dir, '.trash', `${c.id}.in`), long, long);
     await p.flush();

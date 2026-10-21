@@ -112,4 +112,24 @@ export class History {
     this.redos = [];
     this.open = null;
   }
+
+  /**
+   * After a change made outside the history (an import replaces the samples): rewrite every step's copy of the list so
+   * it applies to the new one, drop typing steps for cases that are gone, and steps that no longer change anything.
+   */
+  rebase(list: (st: Partial<Omit<ListState, 'shownFiles'>>) => Partial<Omit<ListState, 'shownFiles'>>, caseGone: (id: string) => boolean): void {
+    for (const stack of [this.undos, this.redos]) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        const e = stack[i];
+        if (e.kind === 'text') {
+          if (caseGone(e.caseId)) stack.splice(i, 1);
+          continue;
+        }
+        e.before = list(e.before);
+        e.after = list(e.after);
+        if (JSON.stringify(e.before) === JSON.stringify(e.after) && !e.shown.added.length && !e.shown.removed.length) stack.splice(i, 1);
+      }
+    }
+    this.open = null;
+  }
 }

@@ -12,7 +12,7 @@ import * as fsp from 'fs/promises';
 import * as path from 'path';
 import type { CfKind, Site } from '../../../shared/problemId';
 import type { VerdictStatus } from '../../../shared/protocol';
-import { atomicWrite, exists, mkdirp, movePath, randomId, readJson, readText } from './fsutil';
+import { atomicWrite, exists, mkdirp, movePath, randomId, readJson, readText, statOrNull } from './fsutil';
 import { findLegacyProb, readLegacyProb } from './legacy';
 
 export const STORE_DIR = '.cp2';
@@ -108,8 +108,36 @@ export interface ListState {
   shownFiles: string[];
 }
 
-/** Files of deleted cases are kept this long, so undo can bring the cases back (also from another window). */
-const TRASH_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+/** Files of deleted cases are kept this long, so undo (in memory, per window) can bring the cases back. */
+export const TRASH_MAX_AGE_MS = 24 * 3600 * 1000;
+
+/**
+ * What importing does to a case list: the block of samples is replaced by the fresh ones in the same place, and pins
+ * carry over by sample number. Used on the problem and on the undo history's copies of earlier lists.
+ */
+export function swapSamples<T extends Partial<Omit<ListState, 'shownFiles'>>>(st: T, old: StoredCase[], fresh: StoredCase[]): T {
+  const imported = [...old, ...(st.cases ?? []).filter((c) => c.origin === 'imported')];
+  const oldKeys = new Set(imported.map((c) => storedKey(c.id)));
+  const freshKeys = fresh.map((c) => storedKey(c.id));
+  const out = { ...st };
+  if (st.cases) out.cases = [...st.cases.filter((c) => c.origin !== 'imported'), ...fresh.map((c) => ({ ...c }))];
+  if (st.order) {
+    let at = st.order.findIndex((k) => oldKeys.has(k));
+    if (at < 0) at = 0;
+    out.order = [...st.order.slice(0, at).filter((k) => !oldKeys.has(k)), ...freshKeys, ...st.order.slice(at).filter((k) => !oldKeys.has(k))];
+  }
+  if (st.pinned) {
+    out.pinned = st.pinned
+      .map((k) => {
+        if (!oldKeys.has(k)) return k;
+        const sample = imported.find((c) => storedKey(c.id) === k)?.sample;
+        const n = fresh.find((c) => c.sample === sample);
+        return n ? storedKey(n.id) : '';
+      })
+      .filter((k) => k);
+  }
+  return out;
+}
 
 /** "Sample 2" / "Case 3" as the sidebar shows it. */
 export function caseLabel(meta: ProblemMeta, id: string): string {
@@ -132,6 +160,7 @@ function toPosix(p: string): string {
 /** One .cp2 folder. */
 export class Store {
   readonly root: string;
+  private swept = false;
 
   constructor(readonly base: string) {
     this.root = path.join(base, STORE_DIR);
@@ -152,6 +181,45 @@ export class Store {
   dirMetaFile(dir: string): string {
     const r = this.rel(dir);
     return path.join(this.root, 'dirs', ...(r ? r.split('/') : []), 'dir.json');
+  }
+
+  /**
+   * Clears old trash in every problem of this store (at most once per session and per 12 hours): problems that are
+   * never opened again would otherwise keep their deleted cases' files.
+   */
+  async sweepTrash(maxAgeMs = TRASH_MAX_AGE_MS): Promise<void> {
+    if (this.swept) return;
+    this.swept = true;
+    const marker = path.join(this.root, 'trash-swept');
+    const st = await statOrNull(marker);
+    if (st && Date.now() - st.mtimeMs < 12 * 3600 * 1000) return;
+    const cutoff = Date.now() - maxAgeMs;
+    const walk = async (dir: string): Promise<void> => {
+      let entries: import('fs').Dirent[];
+      try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const sub = path.join(dir, e.name);
+        if (e.name !== '.trash') {
+          await walk(sub);
+          continue;
+        }
+        let left = 0;
+        for (const n of await fsp.readdir(sub).catch(() => [] as string[])) {
+          const f = path.join(sub, n);
+          const fst = await statOrNull(f);
+          if (fst && fst.mtimeMs >= cutoff) left++;
+          else await fsp.rm(f, { force: true }).catch(() => undefined);
+        }
+        if (!left) await fsp.rmdir(sub).catch(() => undefined);
+      }
+    };
+    await walk(path.join(this.root, 'cases'));
+    if (await exists(this.root)) await atomicWrite(marker, '').catch(() => undefined);
   }
 
   get buildRoot(): string {
@@ -425,30 +493,21 @@ export class Problem {
    * Replaces every imported case with `tests`. The new block takes the old block's place in the
    * order (top of the list on first import); pins carry over by sample number.
    */
-  async replaceImported(tests: { input: string; output: string }[]): Promise<void> {
+  async replaceImported(tests: { input: string; output: string }[]): Promise<{ old: StoredCase[]; fresh: StoredCase[] }> {
     const old = this.meta.cases.filter((c) => c.origin === 'imported');
-    const oldKeys = new Set(old.map((c) => storedKey(c.id)));
-    let at = this.meta.order.findIndex((k) => oldKeys.has(k));
-    if (at < 0) at = 0;
     const fresh: StoredCase[] = [];
     for (let i = 0; i < tests.length; i++) {
       const c: StoredCase = { id: randomId(8), origin: 'imported', sample: i + 1 };
       await this.writeCaseFiles(c.id, tests[i].input, tests[i].output);
       fresh.push(c);
     }
-    const before = this.meta.order.slice(0, at).filter((k) => !oldKeys.has(k));
-    const after = this.meta.order.slice(at).filter((k) => !oldKeys.has(k));
-    this.meta.order = [...before, ...fresh.map((c) => storedKey(c.id)), ...after];
-    const pinOrder = this.meta.pinned.map((k) => {
-      if (!oldKeys.has(k)) return k;
-      const s = old.find((c) => storedKey(c.id) === k)?.sample;
-      const n = fresh.find((c) => c.sample === s);
-      return n ? storedKey(n.id) : '';
-    });
-    this.meta.pinned = pinOrder.filter((k) => k);
-    this.meta.cases = [...this.meta.cases.filter((c) => c.origin !== 'imported'), ...fresh];
+    const next = swapSamples({ cases: this.meta.cases, order: this.meta.order, pinned: this.meta.pinned }, old, fresh);
+    this.meta.cases = next.cases!;
+    this.meta.order = next.order!;
+    this.meta.pinned = next.pinned!;
     for (const c of old) await this.trashCase(c.id);
     this.scheduleSave();
+    return { old, fresh };
   }
 
   setPinned(key: string, on: boolean): void {

@@ -70,11 +70,19 @@ export class StressHost {
    * Where generated cases go: the open file when it's a solution, else the folder's sus (with gen.cpp or a brute
    * open, the case is still meant for the solution).
    */
-  private genTarget(dir: string, listing: DirListing, active: string, meta: DirMeta, gen: string): string | null {
-    const other = (n: string) => !!n && n !== gen && n !== meta.gen.brute && listing.files.includes(n);
+  private async genTarget(dir: string, listing: DirListing, active: string, meta: DirMeta, gen: string): Promise<string | null> {
+    const sl = this.slots(dir, listing, active, meta);
+    // Every program the folder's pickers use as a helper (a hand-picked ref.cpp or chk.cpp isn't the solution).
+    const helpers = new Set([gen, meta.gen.brute, meta.wa.brute, meta.wa.gen, meta.re.gen, sl.wa.brute.value]);
+    for (const sus of [sl.wa.sus.value, sl.re.sus.value]) {
+      if (!sus || !listing.files.includes(sus)) continue;
+      const st = (await this.c.getProblem(path.join(dir, sus))).meta.settings;
+      if (st.compare === 'checker') helpers.add(st.checker);
+      if (st.interactive) helpers.add(st.judge);
+    }
+    const other = (n: string) => !!n && !helpers.has(n) && listing.files.includes(n);
     const a = path.basename(active);
     if (path.dirname(active) === dir && plain(a) && other(a)) return active;
-    const sl = this.slots(dir, listing, active, meta);
     const sus = [sl.wa.sus.value, sl.re.sus.value].find(other);
     return sus ? path.join(dir, sus) : null;
   }
@@ -96,7 +104,7 @@ export class StressHost {
     const has = (n: string) => !!n && listing.files.includes(n);
     const out = {} as { gen: GenSectionVM; wa: StressSectionVM; re: StressSectionVM };
     const g = this.genSlot(dir, listing, active, meta);
-    const target = this.genTarget(dir, listing, active, meta, g.value);
+    const target = await this.genTarget(dir, listing, active, meta, g.value);
     // Interactive: the generated file is the judge's input; there's no expected output to fill.
     const interactive = !!target && (await this.c.getProblem(target)).meta.settings.interactive;
     const answer = interactive ? '' : (meta.gen.brute ?? '');
@@ -321,7 +329,7 @@ export class StressHost {
       return;
     }
     // The stress case lives in `in` / `ans`: show it for sus and for the file you're looking at.
-    await this.showStressCase([susFile, active]);
+    void this.showStressCase([susFile, active]);
     if (mode === 're') {
       // A stale `ans` from an earlier WA run would show up as the expected output.
       const ans = path.join(dir, 'ans');
@@ -353,6 +361,11 @@ export class StressHost {
       limits: this.c.limits(),
       publishIntervalMs: 150,
     };
+    // Stopped (or started again) while we were getting here: don't start a second run on the same folder.
+    if (rs.cancelled || this.runs.get(key) !== rs) {
+      this.c.requestRender(0);
+      return;
+    }
     const run = new StressRun(sc);
     rs.run = run;
     rs.compiling = false;
@@ -414,10 +427,12 @@ export class StressHost {
   private showStressCase(files: string[]): Promise<void> {
     for (const f of files) this.stressShownFor.add(f);
     // Through the case-change queue, so it can't land inside an undo step being recorded.
-    return this.c.serial(async () => {
-      for (const f of new Set(files)) (await this.c.getProblem(f)).showFile('in', true);
-      this.c.requestRender();
-    });
+    return this.c
+      .serial(async () => {
+        for (const f of new Set(files)) (await this.c.getProblem(f)).showFile('in', true);
+        this.c.requestRender();
+      })
+      .catch((e) => this.c.log(`showing the stress case failed: ${e}`));
   }
 
   /** A file was opened: in a folder with a stress run this session, show the stress case once (a later hide sticks). */
@@ -456,7 +471,7 @@ export class StressHost {
     const listing = await this.c.dirs.get(dir);
     const gen = this.genSlot(dir, listing, active, meta).value;
     if (!gen || !listing.files.includes(gen)) return fail('no generator: pick one or Set up');
-    const target = this.genTarget(dir, listing, active, meta, gen);
+    const target = await this.genTarget(dir, listing, active, meta, gen);
     if (!target) return fail('open the solution file first');
     const p = await this.c.getProblem(target);
     const answer = p.meta.settings.interactive ? undefined : meta.gen.brute;
@@ -489,13 +504,19 @@ export class StressHost {
       else note = ` · ${answer} failed (${describeExit(b)}), so no expected output`;
     }
     const size = (await statOrNull(inF))?.size ?? 0;
-    const { value: c } = await this.c.serial(() => this.c.recordList(target, 'generating a case', (p) => p.addCaseFromFiles(inF, expected)));
-    const where = target === active ? '' : ` to ${path.basename(target)}`;
+    // recordList follows the file if it was moved while generating (and refuses if it's gone).
+    const { value: added, file } = await this.c.serial(() =>
+      this.c.recordList(target, 'generating a case', async (q) => {
+        const c = await q.addCaseFromFiles(inF, expected);
+        return { key: storedKey(c.id), label: caseLabel(q.meta, c.id) };
+      }),
+    );
+    const where = file === this.c.active ? '' : ` to ${path.basename(file)}`;
     gs.running = false;
-    gs.status = { state: note ? 'error' : 'clean', text: `added ${caseLabel(p.meta, c.id)}${where} · ${formatBytes(size)}${note}` };
+    gs.status = { state: note ? 'error' : 'clean', text: `added ${added.label}${where} · ${formatBytes(size)}${note}` };
     this.c.requestRender(0);
-    if (target === this.c.active) this.c.reveal(storedKey(c.id), { expand: true });
-    else this.c.notice(`Added ${caseLabel(p.meta, c.id)}${where}`);
+    if (file === this.c.active) this.c.reveal(added.key, { expand: true });
+    else this.c.notice(`Added ${added.label}${where}`);
   }
 
   /** Rerun the failing test with the normal (-DLOCAL) build so dbg() output is visible. */

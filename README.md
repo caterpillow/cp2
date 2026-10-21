@@ -10,8 +10,8 @@ sends problems from the judge to VS Code. Inspired by [CPH](https://github.com/a
   **Files ▾** (paired with `ans` / `out` / `output` / `expected`); tick the ones you want as cases. They're read-only in
   the sidebar: **Keep** copies one into an editable case. The stress test's `in` / `ans` shows up by itself.
 - **Undo / redo** in the sidebar: `Ctrl+Z`, and `Ctrl+R` (or `Ctrl+Y` / `Ctrl+Shift+Z`). Typing, deleting, Keep,
-  Gen case, moving, pinning and showing / hiding files are undoable (deleted cases come back with their files).
-  Importing samples isn't (it also relinks the file), and starts a fresh history for that file.
+  Gen case, moving, pinning and showing / hiding files are undoable (deleted cases come back with their files for a
+  day). Importing samples isn't undoable itself (it also relinks the file), but what you did before it still is.
 - **Sidebar:** cases turn green or red, and after a run the passing ones fold up (like CPH). Drag to reorder, pin to
   the top, first difference highlighted, line numbers, line wrap toggle,
   comparison modes (standard, first line, precision, custom checker), stdio-interactive problems with a judge or a

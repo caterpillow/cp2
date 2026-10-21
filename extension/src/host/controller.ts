@@ -10,7 +10,7 @@ import { atomicWrite, exists, readText, sha1, statOrNull } from '../core/fsutil'
 import { ManualSession, runChecker, runInteractive } from '../core/interactive';
 import { isCompileWithCandidate, isSourceFile, langOf } from '../core/lang';
 import { classifyRun, describeExit, runProcess } from '../core/runner';
-import { caseLabel, displayOrder, fileKey, isStoredKey, keyId, Problem, ProblemSettings, Store, StoreIndex, StoreLocator, storedKey } from '../core/store';
+import { caseLabel, displayOrder, fileKey, isStoredKey, keyId, Problem, ProblemSettings, Store, StoreIndex, StoreLocator, StoredCase, storedKey, swapSamples } from '../core/store';
 import type { CaseVM, FromWebview, ResultVM, ToWebview, TranscriptLine, ViewState } from '../../../shared/viewModel';
 import { DirIndex, DirListing } from './dirIndex';
 import { diffListState, HistoryEntry } from './history';
@@ -112,7 +112,11 @@ export class Controller implements vscode.Disposable {
   getProblem(file: string): Promise<Problem> {
     let p = this.problems.get(file);
     if (!p) {
-      p = (async () => Problem.load(file, await this.storeFor(file), legacySaveLocation(vscode.Uri.file(file))))();
+      p = (async () => {
+        const store = await this.storeFor(file);
+        store.sweepTrash().catch((e) => this.log(`trash sweep failed: ${e}`));
+        return Problem.load(file, store, legacySaveLocation(vscode.Uri.file(file)));
+      })();
       this.problems.set(file, p);
       p.catch(() => this.problems.delete(file));
     }
@@ -300,6 +304,7 @@ export class Controller implements vscode.Disposable {
       }
     }
     idx.save();
+    for (const key of [...this.problems.keys(), ...this.sessions.keys()]) if (key.startsWith(oldDir + path.sep)) this.movedTo.set(key, newDir + key.slice(oldDir.length));
     for (const key of [...this.problems.keys()]) if (key.startsWith(oldDir + path.sep)) this.problems.delete(key);
     for (const key of [...this.sessions.keys()]) if (key.startsWith(oldDir + path.sep)) this.sessions.delete(key);
     if (this.active?.startsWith(oldDir + path.sep)) this.active = newDir + this.active.slice(oldDir.length);
@@ -318,18 +323,27 @@ export class Controller implements vscode.Disposable {
     return run;
   }
 
-  /** Runs a change to a file's case list as one undo step. Call it inside serial(). */
-  async recordList<T>(file: string, label: string, fn: (p: Problem) => T | Promise<T>): Promise<{ value: T; entry: HistoryEntry | null }> {
+  /**
+   * Runs a change to a file's case list as one undo step. Call it inside serial(). Follows moves that happened while
+   * the caller was busy (a file that's gone throws instead of conjuring up an empty problem).
+   */
+  async recordList<T>(file: string, label: string, fn: (p: Problem) => T | Promise<T>): Promise<{ value: T; entry: HistoryEntry | null; file: string }> {
+    file = this.currentPath(file);
+    if (!(await exists(file))) throw new Error(`${path.basename(file)} was moved or deleted`);
     const s = await this.getSession(file);
     const before = s.problem.listState();
     const value = await fn(s.problem);
     const e = diffListState(label, before, s.problem.listState());
-    return { value, entry: e ? s.history.push(e) : null };
+    return { value, entry: e ? s.history.push(e) : null, file };
   }
 
-  /** A change made outside the history (import): older steps can't be applied over it any more. */
-  forgetHistory(file: string): void {
-    this.sessions.get(file)?.history.clear();
+  /** An import replaced the samples: earlier undo steps now apply to the new ones (and never revert the import). */
+  rebaseHistory(file: string, old: StoredCase[], fresh: StoredCase[]): void {
+    const s = this.sessions.get(this.currentPath(file));
+    if (!s) return;
+    const gone = new Set(old.map((c) => c.id));
+    s.history.rebase((st) => swapSamples(st, old, fresh), (id) => gone.has(id));
+    for (const id of gone) s.results.delete(storedKey(id));
   }
 
   notice(text: string, action?: 'undo' | 'redo', id?: number): void {
@@ -627,11 +641,21 @@ export class Controller implements vscode.Disposable {
     const queue = [...keys];
     let failed = false;
     let anyRun = false;
+    // Deleted (or hidden) while queued or running: no result, and it doesn't count as a failure.
+    const gone = (k: string) => (isStoredKey(k) ? !p.findCase(keyId(k)) : !p.meta.shownFiles.includes(keyId(k)));
     const worker = async () => {
       while (queue.length && !abort.signal.aborted) {
         const k = queue.shift()!;
+        if (gone(k)) {
+          s.results.delete(k);
+          continue;
+        }
         this.setResult(s, k, { verdict: 'RUNNING', at: Date.now() });
         const r = await this.runCaseWith(s, k, listing, built, judge, checker, abort.signal);
+        if (gone(k)) {
+          s.results.delete(k);
+          continue;
+        }
         if (abort.signal.aborted && r.verdict !== 'STOPPED') r.verdict = 'STOPPED';
         if (!['AC', 'RAN', 'NOCHECK', 'STOPPED'].includes(r.verdict)) failed = true;
         anyRun = true;
@@ -822,8 +846,8 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  /** Where a file is now, following moves (Set up, renames) the webview may not know about yet. */
-  private currentPath(file: string): string {
+  /** Where a file is now, following moves (Set up, renames) the webview or a slow task may not know about yet. */
+  currentPath(file: string): string {
     for (let i = 0; i < 10 && this.movedTo.has(file); i++) file = this.movedTo.get(file)!;
     return file;
   }
@@ -939,7 +963,8 @@ export class Controller implements vscode.Disposable {
         const had = new Set(visible());
         await p.applyListState(st, dir === 'undo' ? { add: e.shown.removed, remove: e.shown.added } : { add: e.shown.added, remove: e.shown.removed });
         const now = visible();
-        for (const k of [...s.results.keys()]) if (!now.includes(k)) s.results.delete(k);
+        // Results of cases that go, and of cases that come back (anything stored while they were away is stale).
+        for (const k of [...s.results.keys()]) if (!now.includes(k) || !had.has(k)) s.results.delete(k);
         for (const k of [...had].filter((k) => !now.includes(k)).concat(now.filter((k) => !had.has(k)))) if (isStoredKey(k)) s.invalidatePrefix(`${k}|`);
         reveal = now.find((k) => !had.has(k));
       }

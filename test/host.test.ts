@@ -459,6 +459,88 @@ describe('gen case', () => {
   });
 });
 
+describe('races', () => {
+  const SLOW = 'import time\nn=int(input())\ntime.sleep(0.4)\nprint(n*2)\n';
+
+  it("a case deleted while Run all is going comes back (undo) without a stale result, and isn't a failure", async () => {
+    const root = await mkws({ 'r/s.py': SLOW });
+    const h = harness(root);
+    fake.config['cp2.runConcurrency'] = 1;
+    const file = path.join(root, 'r/s.py');
+    await h.c.setActive(file);
+    await h.c.onMessage({ type: 'addCase' });
+    await h.c.onMessage({ type: 'addCase' });
+    let s = await h.state();
+    const [k1, k2] = s.cases.map((c) => c.key);
+    await h.c.onMessage({ type: 'edit', key: k1, field: 'in', text: '1\n', file });
+    await h.c.onMessage({ type: 'edit', key: k2, field: 'in', text: '2\n', file });
+    const run = h.c.runAll();
+    await h.waitFor((x) => x.cases.find((c) => c.key === k1)?.result?.verdict === 'RUNNING');
+    await h.c.onMessage({ type: 'deleteCase', key: k2 });
+    await run;
+    await h.c.onMessage({ type: 'undo', file });
+    s = await h.state();
+    assert.ok(s.cases.some((c) => c.key === k2), 'restored');
+    assert.equal(s.cases.find((c) => c.key === k2)!.result, undefined, 'no "case disappeared" error');
+    assert.equal(h.c.sessionIfLoaded(file)!.lastRun?.failed, false);
+    delete fake.config['cp2.runConcurrency'];
+    h.c.dispose();
+    h.integ.dispose();
+  });
+
+  it('Gen case follows the file when it is moved while generating', async () => {
+    const root = await mkws({ 'm/x.cpp': DOUBLE, 'm/gen.py': 'import time\ntime.sleep(0.5)\nprint(3)\n' });
+    const h = harness(root);
+    const file = path.join(root, 'm/x.cpp');
+    await h.c.setActive(file);
+    const gen = h.c.onMessage({ type: 'genCase' });
+    await h.waitFor((x) => x.stress.gen.status?.state === 'running');
+    const moved = path.join(root, 'm/y.cpp');
+    await fsp.rename(file, moved);
+    await h.c.moveProblem(file, moved);
+    await gen;
+    await h.c.setActive(moved);
+    const s = await h.state();
+    assert.equal(s.cases.length, 1, s.stress.gen.status?.text);
+    assert.equal(s.cases[0].input.text, '3\n');
+    assert.ok(!fs.existsSync(path.join(root, '.cp2/cases/m/x.cpp')), 'no data left behind for the old name');
+    h.c.dispose();
+    h.integ.dispose();
+  });
+
+  it("a hand-picked brute isn't taken for the solution", async () => {
+    const root = await mkws({ 'k/k.cpp': DOUBLE, 'k/ref.cpp': DOUBLE, 'k/gen.py': 'print(5)\n' });
+    const h = harness(root);
+    const ref = path.join(root, 'k/ref.cpp');
+    await h.c.setActive(ref);
+    await h.c.stress.onMessage(ref, { type: 'stressPick', mode: 'wa', role: 'brute', value: 'ref.cpp' });
+    assert.equal((await h.state()).stress.gen.targetName, 'k.cpp');
+    h.c.dispose();
+    h.integ.dispose();
+  });
+
+  it('a stress run starts and stops while case changes are queued', async () => {
+    const SUM = '#include <bits/stdc++.h>\nint main(){int n;std::cin>>n;std::cout<<n<<"\\n";}\n';
+    const root = await mkws({ 'w/w.cpp': SUM, 'w/wbrute.cpp': SUM, 'w/gen.py': 'import random\nprint(random.randint(1,9))\n' });
+    const h = harness(root);
+    fake.config['cp2.stress.maxIterations'] = 0;
+    const file = path.join(root, 'w/w.cpp');
+    await h.c.setActive(file);
+    let release!: () => void;
+    const blocker = h.c.serial(() => new Promise<void>((r) => (release = r)));
+    const run = h.c.stress.onMessage(file, { type: 'stressRun', mode: 'wa' });
+    await h.waitFor((x) => x.stress.wa.status?.state === 'running', 30000);
+    await h.c.stress.onMessage(file, { type: 'stressStop', mode: 'wa' });
+    await run;
+    assert.equal((await h.state()).stress.wa.status?.state, 'stopped');
+    release();
+    await blocker;
+    delete fake.config['cp2.stress.maxIterations'];
+    h.c.dispose();
+    h.integ.dispose();
+  });
+});
+
 describe('interactive', () => {
   it('runs against a judge and records the conversation', async () => {
     const root = await mkws({
@@ -605,15 +687,35 @@ describe('integrations', () => {
     await h.c.setActive(z);
     let s = await h.state();
     assert.match(s.importBtn.label, /^Import · 2261 A/);
+    // A hand-made case, typed into and deleted before the first import.
     await h.c.onMessage({ type: 'addCase' });
+    const mine = (await h.state()).cases[0].key;
+    await h.c.onMessage({ type: 'edit', key: mine, field: 'in', text: 'precious\n', file: z });
+    await h.c.onMessage({ type: 'deleteCase', key: mine });
     await h.integ.doImport(z);
     s = await h.state();
     assert.equal(s.cases.filter((c) => c.origin === 'imported').length, 2);
-    // An import isn't an undo step (it relinks the file) and older steps can't be applied over it.
+    // The import itself isn't an undo step (it also relinks the file), but what came before stays undoable and never
+    // brings back the samples from before the import.
     h.posts.length = 0;
     await h.c.onMessage({ type: 'undo', file: z });
-    assert.ok(h.posts.some((m) => m.type === 'notice' && m.text === 'Nothing to undo'));
-    assert.equal((await h.state()).cases.filter((c) => c.origin === 'imported').length, 2);
+    assert.ok(h.posts.some((m) => m.type === 'notice' && m.text === 'Undid deleting Case 1'));
+    let after = await h.state();
+    assert.equal(after.cases.find((c) => c.key === mine)?.input.text, 'precious\n');
+    assert.equal(after.cases.filter((c) => c.origin === 'imported').length, 2);
+    // A pin on a sample, then a re-import: undoing the pin unpins the new sample.
+    const sample1 = after.cases.find((c) => c.label === 'Sample 1')!.key;
+    await h.c.onMessage({ type: 'pin', key: sample1, pinned: true });
+    await h.integ.doImport(z);
+    after = await h.state();
+    const newSample1 = after.cases.find((c) => c.label === 'Sample 1')!;
+    assert.notEqual(newSample1.key, sample1);
+    assert.equal(newSample1.pinned, true, 'the pin carried over');
+    await h.c.onMessage({ type: 'undo', file: z });
+    after = await h.state();
+    assert.equal(after.cases.find((c) => c.label === 'Sample 1')!.pinned, false, 'undo unpins the re-imported sample');
+    assert.equal(after.cases.filter((c) => c.origin === 'imported').length, 2);
+    assert.ok(after.cases.some((c) => c.key === mine));
     assert.equal(s.problem?.timeLimitMs, 2000);
     assert.equal(s.submitBtn.enabled, true);
     assert.match(fake.statusBar['cp2.problem'] ?? '', /2261 A/);

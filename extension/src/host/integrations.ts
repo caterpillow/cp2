@@ -244,6 +244,9 @@ export class Integrations implements Extras, vscode.Disposable {
   }
 
   private async applyImport(file: string, data: ProblemData, quiet: boolean): Promise<void> {
+    // The scrape takes a while: the file may have been moved (Set up, a rename) or deleted meanwhile.
+    file = this.c.currentPath(file);
+    if (!(await exists(file))) return;
     const p = await this.c.getProblem(file);
     const tests = data.interactive ? [] : data.tests;
     const idx = await this.c.indexFor(p.store);
@@ -258,10 +261,10 @@ export class Integrations implements Extras, vscode.Disposable {
       p.meta.autoImported = false;
     }
     if (tests.length || !data.note) {
-      // Not an undo step: an import also relinks the file (name, limits, verdict), which undo couldn't put back.
+      // Not an undo step (it also relinks the file: name, limits, verdict), but earlier steps stay undoable.
       await this.c.serial(async () => {
-        await p.replaceImported(tests);
-        this.c.forgetHistory(file);
+        const { old, fresh } = await p.replaceImported(tests);
+        this.c.rebaseHistory(file, old, fresh);
       });
     }
     if (data.anonymous) {
