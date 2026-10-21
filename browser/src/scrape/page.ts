@@ -88,6 +88,15 @@ export function analyzePage(doc: Document, url: string, pick?: { index?: string;
     info.problem = scrapeProblem(site, doc, url);
     return info;
   }
+  if (site === 'orac2' && !/\/(submissions?|hof|feedback)(\/|$)/.test(path)) {
+    // ORAC sets (problem of the week, ...) have their own URL shapes: go by the page content.
+    const p = scrapeOracProblem(doc, url);
+    if (p) {
+      info.kind = 'problem';
+      info.problem = p;
+      return info;
+    }
+  }
   if (isSubmissionsPath(site, path)) {
     info.kind = 'submissions';
     return info;

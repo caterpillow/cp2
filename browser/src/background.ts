@@ -240,6 +240,7 @@ async function findProblemTab(ref: ProblemRef): Promise<chrome.tabs.Tab | null> 
   const key = problemKey(ref);
   const tabs = await siteTabs();
   const own = tabs.find((t) => {
+    if (t.url && t.url.split('#')[0] === ref.url.split('#')[0]) return true;
     const r = t.url ? parseProblemUrl(t.url) : null;
     return r && problemKey(r) === key;
   });

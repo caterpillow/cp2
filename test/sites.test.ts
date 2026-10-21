@@ -61,6 +61,21 @@ describe('more judges', () => {
     assert.deepEqual(r.ioFiles, { input: 'birdin.txt', output: 'birdout.txt' });
   });
 
+  it('ORAC problem-of-the-week style URLs are recognised by the page content', () => {
+    const html = fx('orac2_problem.html');
+    const a = analyzePage(doc(html), 'https://orac2.info/hub/potw/2025/week-6/duels/');
+    assert.equal(a.kind, 'problem');
+    assert.equal(a.problem?.name, 'The Terrifying Canary-Bird');
+    assert.equal(a.problem?.ref.taskId, '1', 'identity from the statement link');
+    assert.equal(a.problem?.ref.url, 'https://orac2.info/hub/potw/2025/week-6/duels/');
+    const own = analyzePage(doc(html.replace('/problem/1/statement.pdf', '/potw/2025/6/statement.pdf')), 'https://orac2.info/potw/2025/6/');
+    assert.equal(own.problem?.ref.taskId, 'potw/2025/6', 'identity from the page path');
+    assert.equal(own.problem?.pdfUrl, 'https://orac2.info/potw/2025/6/statement.pdf');
+    const plain = analyzePage(doc('<html><body><h1>Hall of Fame</h1><p>nothing here</p></body></html>'), 'https://orac2.info/hub/personal/');
+    assert.equal(plain.kind, 'other');
+    assert.equal(analyzePage(doc(html), 'https://orac2.info/problem/1/submissions').kind, 'submissions');
+  });
+
   it('QOJ: limits and PDF statements', () => {
     const q = analyzePage(doc(fx('qoj_problem_1.html')), 'https://qoj.ac/problem/1').problem!;
     assert.equal(q.timeLimitMs, 1000);

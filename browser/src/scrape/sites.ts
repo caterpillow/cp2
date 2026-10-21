@@ -108,16 +108,34 @@ export function scrapeOjuzProblem(doc: Document, url: string): ProblemData | nul
 
 // ---------------- ORAC ----------------
 
+/**
+ * ORAC problem pages, recognised by their content rather than their URL: problem-of-the-week and
+ * other sets use URLs that aren't /problem/<id>/. Anything on orac2.info with the limits table or
+ * an embedded statement counts. Identity comes from the statement link (/problem/<id>/statement.pdf)
+ * when there is one, else from the page's path.
+ */
 export function scrapeOracProblem(doc: Document, url: string): ProblemData | null {
-  const ref = parseProblemUrl(url);
-  if (!ref || ref.site !== 'orac2') return null;
   const t = headerTable(doc);
+  const pdfUrl = embeddedPdf(doc, url);
+  let ref = parseProblemUrl(url);
+  if (!ref || ref.site !== 'orac2') {
+    if (!pdfUrl && !t.has('time limit')) return null;
+    const viaStatement = pdfUrl?.match(/^https?:\/\/(?:[^/]+\.)?orac2\.info\/problem\/([^/]+)\//);
+    if (viaStatement) ref = parseProblemUrl(`https://orac2.info/problem/${viaStatement[1]}/`) ?? null;
+    if (!ref) {
+      const u = new URL(url);
+      const path = u.pathname.replace(/^\/+|\/+$/g, '');
+      if (!path) return null;
+      ref = { site: 'orac2', contestId: '', taskId: path, url: `${u.origin}${u.pathname}` };
+    }
+    ref.url = url.split('#')[0];
+  }
   const input = t.get('input file');
   const output = t.get('output file');
   return problem(ref, cleanText(doc.querySelector('h1')) || ref.taskId, {
     timeLimitMs: parseTimeLimit(t.get('time limit') ?? ''),
     memoryLimitMb: parseMemoryLimit(t.get('memory limit') ?? ''),
-    pdfUrl: embeddedPdf(doc, url),
+    pdfUrl,
     ioFiles: input && output && !/stdin|standard/i.test(input) ? { input, output } : undefined,
   });
 }
