@@ -6,14 +6,18 @@ sends problems from the judge to VS Code. Inspired by [CPH](https://github.com/a
 
 - **No "create problem" step.** Every C++ / C / Python file you open is a problem. Its test cases live in `.cp2/` at
   the workspace root as plain `.in` / `.ans` files, so very large cases stay fast.
-- **Text files are test cases.** `in`, `in3`, `a.in`, `a-in.txt`, `wormin.txt`, … next to your code show up
-  automatically, paired with `ans` / `out` / `output` / `expected`. They're read-only in the sidebar: **Keep** copies
-  one into an editable case (the stress test's `in` / `ans` too).
+- **Text files are test cases.** `in`, `in3`, `a.in`, `a-in.txt`, `wormin.txt`, … next to your code are listed under
+  **Files ▾** (paired with `ans` / `out` / `output` / `expected`); tick the ones you want as cases. They're read-only in
+  the sidebar: **Keep** copies one into an editable case. The stress test's `in` / `ans` shows up by itself.
+- **Undo / redo** in the sidebar: `Ctrl+Z`, and `Ctrl+R` (or `Ctrl+Y` / `Ctrl+Shift+Z`). Typing, deleting, Keep,
+  Gen case, moving, pinning and showing / hiding files are undoable (deleted cases come back with their files).
+  Importing samples isn't (it also relinks the file), and starts a fresh history for that file.
 - **Sidebar:** cases turn green or red, and after a run the passing ones fold up (like CPH). Drag to reorder, pin to
   the top, first difference highlighted, line numbers, line wrap toggle,
   comparison modes (standard, first line, precision, custom checker), stdio-interactive problems with a judge or a
   chat-style manual run, extra files to compile with (graders, headers), and a "judge flags" mode for tight time limits.
 - **Stress testing** (WA and RE) with sus / brute / gen pickers, parallel workers, and a search for a smaller failing test.
+- **Generate test case:** pick a generator (or let **Set up** make `gen.cpp`), then **Gen case** adds a random test.
 - **Fast compiles:** a cache plus automatic precompiled `bits/stdc++.h` / `bits/extc++.h`, about 4× faster.
 - **Browser:** `Ctrl+Shift+I` imports the samples of the problem page you used last. **Write Contest** creates
   `a.cpp`, `b.cpp`, … for a whole contest. **Submit** sends your code, and verdicts colour the explorer
@@ -115,6 +119,7 @@ Reload VS Code after installing. The cp2 icon appears in the activity bar.
 | | |
 | --- | --- |
 | `Ctrl+Shift+R` | run all test cases (`cp2.runAll`) |
+| `Ctrl+Z` / `Ctrl+R` in the sidebar | undo / redo (also `Ctrl+Y`, `Ctrl+Shift+Z`) |
 | `Ctrl+Shift+I` | import the samples of the problem page you used last in the browser |
 | toolbar icon | send the current page's problem straight into the active file (works on any page or PDF) |
 | status bar | the browser's current problem (click to import) and contest (problem letters, ✓/✗, time left) |
@@ -123,6 +128,10 @@ Reload VS Code after installing. The cp2 icon appears in the activity bar.
 - **Import** uses the problem you used last in the browser, even if the file is already linked to another one.
   The sidebar tells you when importing will re-link the file.
 - **Submit** goes to the problem the file is linked to. It asks first if the last run failed or the file changed since.
+- **Generate test case** (bottom of the sidebar): a generator (`gen.cpp`, `gen.py`, …; **Set up** creates one) and
+  optionally an *answer* program. **Gen case** next to **+ Case** runs the generator with a random seed in `argv[1]`
+  and adds its output as a new case; with an answer program, that program's output becomes the expected output.
+  With the gen or the brute open, the case goes to the folder's solution.
 - **Stress testing:** the two sections at the bottom of the sidebar. **Set up** turns `x.cpp` into `x/x.cpp`,
   `x/xbrute.cpp` and `x/gen.cpp`. Generated tests go to `in` / `ans`; while it runs, the `in` case also shows sus's
   output and stderr on the test on screen. After a failure, cp2 keeps looking for a

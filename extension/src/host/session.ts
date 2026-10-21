@@ -4,6 +4,7 @@ import type { DiffInfo } from '../core/compare';
 import { formatBytes, readHead } from '../core/fsutil';
 import type { ManualSession } from '../core/interactive';
 import { Problem } from '../core/store';
+import { History } from './history';
 import { readLineWindow } from '../core/textWindow';
 import type { TextVM, TranscriptLine, Verdict } from '../../../shared/viewModel';
 
@@ -41,6 +42,10 @@ interface TextEntry {
   /** Source file and the line the window was centred on (to know when to re-read). */
   file?: string;
   centre?: number;
+  /** Typed in the webview (see setTextFromWebview). */
+  echo?: boolean;
+  /** Invalidated: re-read before use (kept to compare with the new read). */
+  stale?: boolean;
 }
 
 export class Session {
@@ -53,8 +58,14 @@ export class Session {
   manualExit: string | undefined;
   /** For the pre-submit check. */
   lastRun: { at: number; sourceMtime: number; failed: boolean; anyRun: boolean } | null = null;
+  /** Undo / redo for this file's cases. */
+  readonly history = new History();
   private texts = new Map<string, TextEntry>();
   private sent = new Map<string, number>();
+  /** Bumped whenever a text is invalidated or replaced, so a read that raced with that isn't cached. */
+  private gens = new Map<string, number>();
+  /** Last webview edit (its sequence number) applied to each text. */
+  private seqs = new Map<string, number>();
 
   constructor(public problem: Problem) {}
 
@@ -67,47 +78,70 @@ export class Session {
     this.sent.clear();
   }
 
+  /** The webview reloaded: its edit numbers start over. */
+  resetSeqs(): void {
+    this.seqs.clear();
+  }
+
+  private bump(id: string): void {
+    this.gens.set(id, (this.gens.get(id) ?? 0) + 1);
+  }
+
   invalidateText(id: string): void {
-    this.texts.delete(id);
+    const e = this.texts.get(id);
+    if (e) e.stale = true;
+    this.bump(id);
   }
 
   invalidateFile(file: string): void {
-    for (const [k, v] of this.texts) if (v.file === file) this.texts.delete(k);
+    for (const [k, v] of this.texts) {
+      if (v.file !== file) continue;
+      v.stale = true;
+      this.bump(k);
+    }
   }
 
   invalidatePrefix(prefix: string): void {
-    for (const k of [...this.texts.keys()]) if (k.startsWith(prefix)) this.texts.delete(k);
+    for (const [k, v] of this.texts) {
+      if (!k.startsWith(prefix)) continue;
+      v.stale = true;
+      this.bump(k);
+    }
   }
 
-  /** The webview already shows `text` (the user typed it). */
-  setTextFromWebview(id: string, text: string, file?: string): void {
-    const rev = nextRev();
-    this.texts.set(id, { rev, text, size: Buffer.byteLength(text), truncated: false, startLine: 1, file });
-    this.sent.set(id, rev);
+  /** A webview edit that changed nothing still counts as applied. */
+  noteSeq(id: string, seq: number | undefined): void {
+    if (seq) this.seqs.set(id, Math.max(seq, this.seqs.get(id) ?? 0));
+  }
+
+  /**
+   * The webview already shows `text` (the user typed it). The text still goes back once, flagged as an echo: the
+   * webview caches it without touching the box, which may already hold newer keystrokes.
+   */
+  setTextFromWebview(id: string, text: string, file?: string, seq?: number): void {
+    this.texts.set(id, { rev: nextRev(), text, size: Buffer.byteLength(text), truncated: false, startLine: 1, file, echo: true });
+    this.bump(id);
+    this.noteSeq(id, seq);
   }
 
   /** Text box backed by a file (optionally windowed around a line of interest). */
   async fileText(id: string, file: string | null, inlineBytes: number, editable: boolean, focusLine?: number): Promise<TextVM> {
-    let e = this.texts.get(id);
-    if (e && (e.file ?? null) !== file) e = undefined;
-    if (e && focusLine && e.truncated && (focusLine < e.startLine || focusLine > e.startLine + countLines(e.text) - 1)) e = undefined;
-    if (!e) {
-      if (!file) e = { rev: nextRev(), text: '', size: 0, truncated: false, startLine: 1 };
-      else {
-        const h = await readHead(file, inlineBytes);
-        if (!h) e = { rev: nextRev(), text: '', size: 0, truncated: false, startLine: 1, file };
-        else if (h.binary) e = { rev: nextRev(), text: `(binary file, ${formatBytes(h.size)})`, size: h.size, truncated: true, startLine: 1, file };
-        else {
-          e = { rev: nextRev(), text: h.text, size: h.size, truncated: h.truncated, startLine: 1, file };
-          if (h.truncated && focusLine && focusLine > countLines(h.text) - 5) {
-            const w = await readLineWindow(file, focusLine);
-            if (w) e = { rev: nextRev(), text: w.text, size: h.size, truncated: true, startLine: w.startLine, file, centre: focusLine };
-          }
-        }
-      }
+    for (let attempt = 0; ; attempt++) {
+      const prev = this.texts.get(id);
+      let e = prev;
+      if (e && (e.stale || (e.file ?? null) !== file)) e = undefined;
+      if (e && focusLine && e.truncated && (focusLine < e.startLine || focusLine > e.startLine + countLines(e.text) - 1)) e = undefined;
+      if (e) return this.toVM(id, e, editable && !e.truncated);
+      const gen = this.gens.get(id) ?? 0;
+      const read = await readEntry(file, inlineBytes, focusLine);
+      // Written or invalidated while we were reading: this read may already be out of date.
+      if ((this.gens.get(id) ?? 0) !== gen && attempt < 3) continue;
+      // Unchanged content keeps its rev, so the webview doesn't replace a box the user may be typing in.
+      const same = prev && (prev.file ?? null) === (read.file ?? null) && prev.text === read.text && prev.startLine === read.startLine && prev.truncated === read.truncated;
+      e = same ? { ...read, rev: prev.rev, echo: prev.echo } : { ...read, rev: nextRev() };
       this.texts.set(id, e);
+      return this.toVM(id, e, editable && !e.truncated);
     }
-    return this.toVM(id, e, editable && !e.truncated);
   }
 
   /** Text box backed by an in-memory string (stderr). */
@@ -122,12 +156,27 @@ export class Session {
 
   private toVM(id: string, e: TextEntry, editable: boolean): TextVM {
     const vm: TextVM = { rev: e.rev, size: e.size, truncated: e.truncated, startLine: e.startLine, editable };
+    if (e.echo) vm.echo = true;
+    const seq = this.seqs.get(id);
+    if (seq) vm.seq = seq;
     if (this.sent.get(id) !== e.rev) {
       vm.text = e.text;
       this.sent.set(id, e.rev);
     }
     return vm;
   }
+}
+
+async function readEntry(file: string | null, inlineBytes: number, focusLine?: number): Promise<Omit<TextEntry, 'rev'>> {
+  if (!file) return { text: '', size: 0, truncated: false, startLine: 1 };
+  const h = await readHead(file, inlineBytes);
+  if (!h) return { text: '', size: 0, truncated: false, startLine: 1, file };
+  if (h.binary) return { text: `(binary file, ${formatBytes(h.size)})`, size: h.size, truncated: true, startLine: 1, file };
+  if (h.truncated && focusLine && focusLine > countLines(h.text) - 5) {
+    const w = await readLineWindow(file, focusLine);
+    if (w) return { text: w.text, size: h.size, truncated: true, startLine: w.startLine, file, centre: focusLine };
+  }
+  return { text: h.text, size: h.size, truncated: h.truncated, startLine: 1, file };
 }
 
 function countLines(s: string): number {

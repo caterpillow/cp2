@@ -3,14 +3,14 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { atomicWrite, copyFileP, exists, readText, sha1, statOrNull } from '../core/fsutil';
+import { atomicWrite, copyFileP, exists, formatBytes, mkdirp, readText, sha1, statOrNull } from '../core/fsutil';
 import { isSourceFile } from '../core/lang';
 import { classifyRun, describeExit, runProcess } from '../core/runner';
 import { resolveSnippet, snippetVars } from '../core/snippet';
-import { DirMeta, loadDirMeta, saveDirMeta, SHRINK_STEPS, shrinkIndex } from '../core/store';
+import { caseLabel, DirMeta, loadDirMeta, saveDirMeta, SHRINK_STEPS, shrinkIndex, storedKey } from '../core/store';
 import { StressConfig, StressLive, StressRun, StressStatus } from '../core/stress';
-import { autofill, defaultGen, planSetup, Slot } from '../core/stressFiles';
-import type { FromWebview, SlotVM, StressSectionVM, StressStatusVM } from '../../../shared/viewModel';
+import { autofill, defaultGen, plain, planSetup, Slot } from '../core/stressFiles';
+import type { FromWebview, GenSectionVM, SectionMode, SlotVM, StressSectionVM, StressStatusVM } from '../../../shared/viewModel';
 import type { Controller } from './controller';
 import type { DirListing } from './dirIndex';
 import type { CaseResult } from './session';
@@ -29,6 +29,10 @@ export class StressHost {
   private metas = new Map<string, Promise<DirMeta>>();
   private runs = new Map<string, RunState>();
   private caseResults = new Map<string, CaseResult>();
+  /** "Gen case" in progress / last outcome, per folder. */
+  private genRuns = new Map<string, { running: boolean; status?: StressStatusVM }>();
+  /** Files the stress case was shown for this session (so hiding it afterwards sticks). */
+  private stressShownFor = new Set<string>();
 
   constructor(private c: Controller) {}
 
@@ -62,13 +66,54 @@ export class StressHost {
     return { wa: autofill(dir, listing.files, active, meta.wa), re: autofill(dir, listing.files, active, meta.re) };
   }
 
-  async sections(active: string, listing: DirListing): Promise<{ wa: StressSectionVM; re: StressSectionVM }> {
+  /**
+   * Where generated cases go: the open file when it's a solution, else the folder's sus (with gen.cpp or a brute
+   * open, the case is still meant for the solution).
+   */
+  private genTarget(dir: string, listing: DirListing, active: string, meta: DirMeta, gen: string): string | null {
+    const other = (n: string) => !!n && n !== gen && n !== meta.gen.brute && listing.files.includes(n);
+    const a = path.basename(active);
+    if (path.dirname(active) === dir && plain(a) && other(a)) return active;
+    const sl = this.slots(dir, listing, active, meta);
+    const sus = [sl.wa.sus.value, sl.re.sus.value].find(other);
+    return sus ? path.join(dir, sus) : null;
+  }
+
+  /** The generator of "Generate test case": its own pick, else the stress sections' pick, else gen.cpp / gen.py / gen*. */
+  private genSlot(dir: string, listing: DirListing, active: string, meta: DirMeta): Slot {
+    const own = meta.gen.gen && listing.files.includes(meta.gen.gen) ? meta.gen.gen : undefined;
+    if (own) return { value: own, auto: false };
+    // The stress sections' gen counts as a suggestion here (shown as "auto").
+    const picked = [meta.wa.gen, meta.re.gen].find((n) => !!n && listing.files.includes(n));
+    return picked ? { value: picked, auto: true } : autofill(dir, listing.files, active, {}).gen;
+  }
+
+  async sections(active: string, listing: DirListing): Promise<{ gen: GenSectionVM; wa: StressSectionVM; re: StressSectionVM }> {
     const dir = path.dirname(active);
     const meta = await this.meta(dir);
     const files = listing.files.filter(isSourceFile).sort();
     const sl = this.slots(dir, listing, active, meta);
     const has = (n: string) => !!n && listing.files.includes(n);
-    const out = {} as { wa: StressSectionVM; re: StressSectionVM };
+    const out = {} as { gen: GenSectionVM; wa: StressSectionVM; re: StressSectionVM };
+    const g = this.genSlot(dir, listing, active, meta);
+    const target = this.genTarget(dir, listing, active, meta, g.value);
+    // Interactive: the generated file is the judge's input; there's no expected output to fill.
+    const interactive = !!target && (await this.c.getProblem(target)).meta.settings.interactive;
+    const answer = interactive ? '' : (meta.gen.brute ?? '');
+    const gr = this.genRuns.get(dir);
+    const genSlots: SlotVM[] = [{ role: 'gen', value: g.value, auto: g.auto, missing: !has(g.value), options: files }];
+    if (!interactive) genSlots.push({ role: 'answer', value: answer, auto: false, missing: !!answer && !has(answer), options: files, optional: true });
+    out.gen = {
+      open: meta.open.gen,
+      slots: genSlots,
+      canRun: has(g.value) && !!target && (!answer || has(answer)),
+      reason: !has(g.value) ? 'pick a generator (or Set up)' : !target ? 'open the solution file' : answer && !has(answer) ? `${answer} doesn't exist` : undefined,
+      needsSetup: !has(g.value),
+      running: !!gr?.running,
+      status: gr?.status,
+      genName: has(g.value) ? g.value : undefined,
+      targetName: target ? path.basename(target) : undefined,
+    };
     for (const mode of ['wa', 're'] as Mode[]) {
       const s = sl[mode];
       const susFile = s.sus.value ? path.join(dir, s.sus.value) : null;
@@ -122,13 +167,19 @@ export class StressHost {
         await this.saveMeta(dir);
         break;
       case 'stressPick': {
-        if (m.role === 'checker' || m.role === 'judge') {
+        if (m.mode === 'gen') {
+          const k = m.role === 'answer' ? 'brute' : 'gen';
+          if (m.value) meta.gen[k] = m.value;
+          else delete meta.gen[k];
+          await this.saveMeta(dir);
+        } else if (m.role === 'checker' || m.role === 'judge') {
           const listing = await this.c.dirs.get(dir);
           const sus = this.slots(dir, listing, active, meta)[m.mode].sus.value;
           if (sus) (await this.c.getProblem(path.join(dir, sus))).updateSettings(m.role === 'checker' ? { checker: m.value } : { judge: m.value });
         } else {
-          if (m.value) meta[m.mode][m.role] = m.value;
-          else delete meta[m.mode][m.role];
+          const role = m.role as 'sus' | 'brute' | 'gen';
+          if (m.value) meta[m.mode][role] = m.value;
+          else delete meta[m.mode][role];
           await this.saveMeta(dir);
         }
         break;
@@ -140,7 +191,8 @@ export class StressHost {
         break;
       }
       case 'stressSetup':
-        await this.setup(active, m.mode);
+        // Moves the file and its cases: not while case edits / undo are being applied.
+        await this.c.serial(() => this.setup(active, m.mode));
         return;
       case 'stressRun':
         await this.run(active, m.mode);
@@ -156,14 +208,15 @@ export class StressHost {
 
   // ---------------- Set up: x.cpp -> x/x.cpp + xbrute.cpp + gen.cpp ----------------
 
-  private async setup(file: string, mode: Mode): Promise<void> {
+  private async setup(file: string, mode: SectionMode): Promise<void> {
     const p = await this.c.getProblem(file);
     const cfg = this.c.cfg();
     const store = p.store;
     const tplRel = cfg.stress.genTemplate;
     const tplPath = tplRel ? (path.isAbsolute(tplRel) ? tplRel : path.join(store.base, tplRel)) : '';
     const genExt = tplPath && (await exists(tplPath)) ? path.extname(tplPath) || '.cpp' : '.cpp';
-    const plan = await planSetup(file, mode, p.meta.settings.compileWith, genExt);
+    // "Generate test case" needs what RE stress needs: its own folder and a gen.
+    const plan = await planSetup(file, mode === 'wa' ? 'wa' : 're', p.meta.settings.compileWith, genExt);
     if (plan.error) {
       void vscode.window.showErrorMessage(`cp2: ${plan.error}`);
       return;
@@ -213,7 +266,7 @@ export class StressHost {
     meta.wa.sus = meta.wa.sus ?? base;
     meta.re.sus = meta.re.sus ?? base;
     if (plan.createBrute) meta.wa.brute = path.basename(plan.createBrute);
-    if (plan.createGen) meta.wa.gen = meta.re.gen = path.basename(plan.createGen);
+    if (plan.createGen) meta.gen.gen = meta.wa.gen = meta.re.gen = path.basename(plan.createGen);
     meta.open[mode] = true;
     await this.saveMeta(plan.targetDir);
     this.c.dirs.invalidate(plan.targetDir);
@@ -267,6 +320,8 @@ export class StressHost {
       this.c.requestRender(0);
       return;
     }
+    // The stress case lives in `in` / `ans`: show it for sus and for the file you're looking at.
+    await this.showStressCase([susFile, active]);
     if (mode === 're') {
       // A stale `ans` from an earlier WA run would show up as the expected output.
       const ans = path.join(dir, 'ans');
@@ -328,6 +383,8 @@ export class StressHost {
       if (final.state === 'clean' || final.state === 'stopped') this.caseResults.set(dir, { ...live, verdict: 'AC' });
       else this.caseResults.delete(dir);
     }
+    // ...and for whatever is open in this folder by the time it ends.
+    if ((final.state === 'found' || final.state === 'error') && this.c.active && path.dirname(this.c.active) === dir) await this.showStressCase([this.c.active]);
     if (final.state === 'found' && final.failure) {
       const f = final.failure;
       if (mode === 'wa' && f.answerFile) {
@@ -349,9 +406,96 @@ export class StressHost {
       };
       this.caseResults.set(dir, result);
       this.c.requestRender(0);
-      setTimeout(() => this.c.poster?.post({ type: 'reveal', key: 'f:in' }), 120);
+      this.c.reveal('f:in');
       void this.debugRerun(dir, susFile, result);
     } else this.c.requestRender(0);
+  }
+
+  private showStressCase(files: string[]): Promise<void> {
+    for (const f of files) this.stressShownFor.add(f);
+    // Through the case-change queue, so it can't land inside an undo step being recorded.
+    return this.c.serial(async () => {
+      for (const f of new Set(files)) (await this.c.getProblem(f)).showFile('in', true);
+      this.c.requestRender();
+    });
+  }
+
+  /** A file was opened: in a folder with a stress run this session, show the stress case once (a later hide sticks). */
+  async opened(file: string): Promise<void> {
+    if (this.stressShownFor.has(file) || !this.isStressDir(path.dirname(file))) return;
+    await this.showStressCase([file]);
+  }
+
+  // ---------------- Gen case ----------------
+
+  /** Runs the folder's generator once (seed in argv[1]) and adds the output as a new case of `active`. */
+  async genCase(active: string): Promise<void> {
+    const dir = path.dirname(active);
+    if (this.genRuns.get(dir)?.running) return;
+    const gs: { running: boolean; status?: StressStatusVM } = { running: true, status: { state: 'compiling', text: 'compiling…' } };
+    this.genRuns.set(dir, gs);
+    this.c.requestRender(0);
+    const meta = await this.meta(dir);
+    const fail = async (text: string, detail?: string) => {
+      gs.running = false;
+      gs.status = { state: 'error', text, detail: detail?.trim().slice(0, 4000) || undefined };
+      if (!meta.open.gen) {
+        meta.open.gen = true;
+        await this.saveMeta(dir);
+      }
+      this.c.requestRender(0);
+    };
+    try {
+      await this.genCaseSteps(active, dir, meta, gs, fail);
+    } catch (e) {
+      await fail(`couldn't generate a case: ${(e as Error).message ?? e}`);
+    }
+  }
+
+  private async genCaseSteps(active: string, dir: string, meta: DirMeta, gs: { running: boolean; status?: StressStatusVM }, fail: (text: string, detail?: string) => Promise<void>): Promise<void> {
+    const listing = await this.c.dirs.get(dir);
+    const gen = this.genSlot(dir, listing, active, meta).value;
+    if (!gen || !listing.files.includes(gen)) return fail('no generator: pick one or Set up');
+    const target = this.genTarget(dir, listing, active, meta, gen);
+    if (!target) return fail('open the solution file first');
+    const p = await this.c.getProblem(target);
+    const answer = p.meta.settings.interactive ? undefined : meta.gen.brute;
+    if (answer && !listing.files.includes(answer)) return fail(`${answer} doesn't exist`);
+    let built: Awaited<ReturnType<Controller['build']>>[];
+    try {
+      built = await Promise.all([this.c.build(path.join(dir, gen), 'stressWA'), ...(answer ? [this.c.build(path.join(dir, answer), 'stressWA')] : [])]);
+    } catch (e) {
+      return fail(`build failed: ${e}`);
+    }
+    if (!built[0].ok) return fail(`${gen} doesn't compile`, built[0].output);
+    if (built[1] && !built[1].ok) return fail(`${answer} doesn't compile`, built[1].output);
+    gs.status = { state: 'running', text: 'generating…' };
+    this.c.requestRender(0);
+    const cfg = this.c.cfg();
+    const work = path.join(p.store.runsRoot, 'gen', sha1(dir).slice(0, 12));
+    await mkdirp(work);
+    const inF = path.join(work, 'in');
+    const ansF = path.join(work, 'ans');
+    // Like stress (which passes the run number): gens that read argv[1] get a different seed each time.
+    const seed = 1 + Math.floor(Math.random() * 2147483646);
+    const limits = this.c.limits();
+    const g = await runProcess({ cmd: [...built[0].cmd, String(seed)], cwd: dir, stdin: 'ignore', stdoutFile: inF, timeLimitMs: cfg.stress.helperTimeoutMs, limits, maxStderr: 16384 });
+    if (classifyRun(g) !== 'OK') return fail(`${gen} failed: ${describeExit(g)}`, g.stderr);
+    let expected: string | null = null;
+    let note = '';
+    if (built[1]) {
+      const b = await runProcess({ cmd: built[1].cmd, cwd: dir, stdin: { file: inF }, stdoutFile: ansF, timeLimitMs: cfg.stress.helperTimeoutMs, limits, maxStderr: 16384 });
+      if (classifyRun(b) === 'OK') expected = ansF;
+      else note = ` · ${answer} failed (${describeExit(b)}), so no expected output`;
+    }
+    const size = (await statOrNull(inF))?.size ?? 0;
+    const { value: c } = await this.c.serial(() => this.c.recordList(target, 'generating a case', (p) => p.addCaseFromFiles(inF, expected)));
+    const where = target === active ? '' : ` to ${path.basename(target)}`;
+    gs.running = false;
+    gs.status = { state: note ? 'error' : 'clean', text: `added ${caseLabel(p.meta, c.id)}${where} · ${formatBytes(size)}${note}` };
+    this.c.requestRender(0);
+    if (target === this.c.active) this.c.reveal(storedKey(c.id), { expand: true });
+    else this.c.notice(`Added ${caseLabel(p.meta, c.id)}${where}`);
   }
 
   /** Rerun the failing test with the normal (-DLOCAL) build so dbg() output is visible. */

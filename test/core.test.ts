@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -110,6 +111,49 @@ describe('urls', () => {
 });
 
 describe('store', () => {
+  it('problems saved before 0.3 keep only their pinned text files shown', async () => {
+    const base = await tmpdir();
+    const file = path.join(base, 'a.cpp');
+    await fsp.writeFile(file, '');
+    const store = new Store(base);
+    await fsp.mkdir(store.problemDir(file), { recursive: true });
+    await fsp.writeFile(path.join(store.problemDir(file), 'problem.json'), JSON.stringify({ version: 1, settings: {}, cases: [], order: ['f:in', 'f:in2'], pinned: ['f:in2'], hiddenFiles: ['in3'] }));
+    const p = await Problem.load(file, store);
+    assert.deepEqual(p.meta.shownFiles, ['in2']);
+    assert.equal('hiddenFiles' in p.meta, false);
+  });
+
+  it('deleted and replaced cases go to the trash, come back with their files, and old trash is cleared', async () => {
+    const base = await tmpdir();
+    const file = path.join(base, 'a.cpp');
+    await fsp.writeFile(file, '');
+    const store = new Store(base);
+    const p = await Problem.load(file, store);
+    const c = await p.addCase('manual', 'in1', 'ans1');
+    const before = p.listState();
+    await p.deleteCase(c.id);
+    assert.equal(fs.existsSync(p.caseFile(c.id, 'in')), false);
+    assert.equal(fs.existsSync(path.join(p.dir, '.trash', `${c.id}.in`)), true);
+    const after = p.listState();
+    await p.applyListState({ cases: before.cases, order: before.order });
+    assert.equal(await p.readCaseText(c.id, 'in'), 'in1');
+    assert.equal(await p.readCaseText(c.id, 'ans'), 'ans1');
+    await p.applyListState({ cases: after.cases, order: after.order });
+    assert.equal(p.meta.cases.length, 0);
+    await p.replaceImported([{ input: 's', output: 't' }]);
+    const old = p.meta.cases[0].id;
+    await p.replaceImported([{ input: 'u', output: 'v' }]);
+    assert.ok(fs.existsSync(path.join(p.dir, '.trash', `${old}.in`)), 'replaced samples are trashed too');
+    // Trash older than a week goes when the problem is next loaded.
+    const long = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    await fsp.utimes(path.join(p.dir, '.trash', `${c.id}.in`), long, long);
+    await p.flush();
+    await Problem.load(file, store);
+    for (let i = 0; i < 50 && fs.existsSync(path.join(p.dir, '.trash', `${c.id}.in`)); i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(fs.existsSync(path.join(p.dir, '.trash', `${c.id}.in`)), false);
+    assert.equal(fs.existsSync(path.join(p.dir, '.trash', `${old}.in`)), true);
+  });
+
   it('folder stress settings: old saved 0 means the slider was never moved', async () => {
     const base = await tmpdir();
     const store = new Store(base);

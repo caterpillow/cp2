@@ -30,6 +30,10 @@ export interface TextVM {
   /** Line number of the first line shown (for windows around a difference). */
   startLine: number;
   editable: boolean;
+  /** This is the text the webview itself sent (an edit): adopt the rev, don't overwrite the box. */
+  echo?: boolean;
+  /** The last webview edit (sequence number) the host has applied to this text. */
+  seq?: number;
 }
 
 export interface DiffMark {
@@ -81,12 +85,39 @@ export interface CaseVM {
 }
 
 export interface SlotVM {
-  role: 'sus' | 'brute' | 'gen' | 'judge' | 'checker';
+  /** `answer`: the optional brute of the generate section. */
+  role: 'sus' | 'brute' | 'gen' | 'judge' | 'checker' | 'answer';
   value: string;
   auto: boolean;
   missing: boolean;
   options: string[];
+  /** Can be left empty. */
+  optional?: boolean;
 }
+
+/** The "Generate test case" section: gen (+ an optional brute for the expected output). */
+export interface GenSectionVM {
+  open: boolean;
+  slots: SlotVM[];
+  canRun: boolean;
+  reason?: string;
+  needsSetup: boolean;
+  running: boolean;
+  status?: StressStatusVM;
+  genName?: string;
+  /** The solution generated cases go to (the open file, or the folder's sus when a gen / brute is open). */
+  targetName?: string;
+}
+
+/** A text file in the folder that looks like a test case. */
+export interface FileCaseVM {
+  name: string;
+  /** Matching answer file, or null. */
+  expected: string | null;
+  shown: boolean;
+}
+
+export type SectionMode = 'gen' | 'wa' | 're';
 
 export interface StressStatusVM {
   state: 'running' | 'shrinking' | 'found' | 'clean' | 'stopped' | 'error' | 'compiling';
@@ -132,7 +163,9 @@ export interface ViewState {
   running: boolean;
   importBtn: { label: string; title: string; enabled: boolean; note?: string };
   submitBtn: { label: string; title: string; enabled: boolean };
-  stress: { wa: StressSectionVM; re: StressSectionVM };
+  stress: { gen: GenSectionVM; wa: StressSectionVM; re: StressSectionVM };
+  /** Every text-file case in the folder (Files menu). */
+  fileCases: FileCaseVM[];
   manual: { visible: boolean; running: boolean; exit?: string };
   ui: { settingsOpen: boolean };
   warnings: string[];
@@ -142,7 +175,10 @@ export interface ViewState {
 export type ToWebview =
   | { type: 'state'; state: ViewState }
   | { type: 'manual'; events: TranscriptLine[]; reset: boolean }
-  | { type: 'reveal'; key: string };
+  /** Scroll a case into view; `focus` puts the cursor in its input, `expand` unfolds it. */
+  | { type: 'reveal'; key: string; focus?: boolean; expand?: boolean }
+  /** A short message at the bottom of the sidebar, optionally with an Undo / Redo link. */
+  | { type: 'notice'; text: string; action?: 'undo' | 'redo'; id?: number };
 
 export type FromWebview =
   | { type: 'ready' }
@@ -152,7 +188,8 @@ export type FromWebview =
   | { type: 'addCase' }
   | { type: 'deleteCase'; key: string }
   | { type: 'hideCase'; key: string }
-  | { type: 'edit'; key: string; field: 'in' | 'ans'; text: string; file: string }
+  /** `seq` numbers every edit the webview sends (one counter for the whole sidebar). */
+  | { type: 'edit'; key: string; field: 'in' | 'ans'; text: string; file: string; seq?: number }
   | { type: 'pin'; key: string; pinned: boolean }
   | { type: 'reorder'; keys: string[] }
   | { type: 'keep'; key: string }
@@ -162,16 +199,21 @@ export type FromWebview =
   | { type: 'submit' }
   | { type: 'setting'; patch: Partial<ProblemSettingsVM> }
   | { type: 'toggleSettings'; open: boolean }
-  | { type: 'stressPick'; mode: 'wa' | 're'; role: SlotVM['role']; value: string }
+  | { type: 'stressPick'; mode: SectionMode; role: SlotVM['role']; value: string }
   | { type: 'stressRun'; mode: 'wa' | 're' }
   | { type: 'stressStop'; mode: 'wa' | 're' }
-  | { type: 'stressSetup'; mode: 'wa' | 're' }
+  | { type: 'stressSetup'; mode: SectionMode }
   | { type: 'stressShrink'; mode: 'wa' | 're'; index: number }
-  | { type: 'stressOpen'; mode: 'wa' | 're'; open: boolean }
+  | { type: 'stressOpen'; mode: SectionMode; open: boolean }
   | { type: 'stressSetting'; mode: 'wa' | 're'; patch: Partial<ProblemSettingsVM> }
   | { type: 'manualStart' }
   | { type: 'manualSend'; text: string }
   | { type: 'manualEof' }
   | { type: 'manualStop' }
   | { type: 'openUrl'; url: string }
-  | { type: 'openFile'; name: string };
+  | { type: 'openFile'; name: string }
+  | { type: 'showFiles'; names: string[]; show: boolean }
+  | { type: 'genCase' }
+  /** `id`: from a notice's button — only that step (if it's still the next one). */
+  | { type: 'undo'; file: string; id?: number }
+  | { type: 'redo'; file: string; id?: number };

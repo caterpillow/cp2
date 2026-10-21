@@ -1,12 +1,16 @@
 // cp2 sidebar UI (vanilla TS + CodeMirror). The extension owns all state; this file renders it
 // and sends user actions back.
 
-import type { CaseVM, FromWebview, ProblemSettingsVM, ResultVM, SlotVM, StressSectionVM, TextVM, ToWebview, TranscriptLine, Verdict, ViewState } from '../../shared/viewModel';
+import type { CaseVM, FromWebview, GenSectionVM, ProblemSettingsVM, ResultVM, SectionMode, SlotVM, StressSectionVM, TextVM, ToWebview, TranscriptLine, Verdict, ViewState } from '../../shared/viewModel';
 import { Mark, TextBox } from './editor';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): any; setState(s: any): void };
 const vscode = acquireVsCodeApi();
-const send = (m: FromWebview) => vscode.postMessage(m);
+function send(m: FromWebview): void {
+  // Whatever the sidebar asks for next (delete, run, undo, Set up, …) happens after the typing that came before it.
+  if (m.type !== 'edit') flushEdits();
+  vscode.postMessage(m);
+}
 
 // ---------------- tiny DOM helpers ----------------
 
@@ -55,6 +59,7 @@ function debounce(fn: () => void, ms: number) {
       fn();
     }
   };
+  d.pending = () => t !== undefined;
   return d;
 }
 
@@ -72,6 +77,10 @@ const liveFields = new Set<{ kind: string; applyWrap(): void }>();
 // ---------------- text cache (texts are only sent when they change) ----------------
 
 const texts = new Map<string, string>();
+/** Numbers every edit sent, across all boxes (the host echoes the last one it applied). */
+let editSeq = 0;
+/** How the host stores a box's text: with a final newline. */
+const withNewline = (t: string) => (t === '' || t.endsWith('\n') ? t : t + '\n');
 function textOf(id: string, vm: TextVM): string {
   if (vm.text !== undefined) texts.set(id, vm.text);
   return texts.get(id) ?? '';
@@ -91,9 +100,11 @@ const emptyEl = h('div', { id: 'empty' });
 const footer = h('footer', { id: 'stress' });
 // The settings panel floats over the top of the case list, so it stays put while the cases scroll.
 const main = h('div', { id: 'main' });
+const noticeEl = h('div', { id: 'notice', hidden: true });
+const filesMenu = h('div', { id: 'files-menu', hidden: true, role: 'menu' });
 scroll.append(warnEl, compileEl, manualEl, casesEl, emptyEl);
-main.append(scroll, settingsEl);
-app.append(hdr, main, footer);
+main.append(scroll, settingsEl, noticeEl);
+app.append(hdr, main, footer, filesMenu);
 
 let state: ViewState | null = null;
 let currentFile = '';
@@ -104,7 +115,7 @@ interface FieldOpts {
   title: string;
   editable?: boolean;
   placeholder?: string;
-  onEdit?: (text: string) => void;
+  onEdit?: (text: string, seq: number) => void;
   onRun?: () => void;
   onOpen?: () => void;
   onBlockedEdit?: () => void;
@@ -121,6 +132,8 @@ class Field {
   private pending: ReturnType<typeof debounce> | null = null;
   private lastText = '';
   private btnsWrap: boolean | null = null;
+  /** Sequence number of this box's last edit sent to the host. */
+  private sentSeq = 0;
 
   readonly kind: string;
 
@@ -136,7 +149,10 @@ class Field {
     this.body = h('div', { class: 'field-body' });
     this.el = h('div', { class: 'field' }, this.head, this.body);
     if (opts.onEdit) {
-      this.pending = debounce(() => opts.onEdit!(this.lastText === '' || this.lastText.endsWith('\n') ? this.lastText : this.lastText + '\n'), 300);
+      this.pending = debounce(() => {
+        this.sentSeq = ++editSeq;
+        opts.onEdit!(withNewline(this.lastText), this.sentSeq);
+      }, 300);
     }
   }
 
@@ -146,7 +162,7 @@ class Field {
 
   update(vm: TextVM, marks: Mark[] = [], scrollTo?: number): void {
     const raw = textOf(this.id, vm);
-    const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+    const text = raw.replace(/\r?\n$/, '');
     if (!this.box) {
       this.box = new TextBox(this.body, {
         editable: vm.editable && !!this.opts.editable,
@@ -154,6 +170,7 @@ class Field {
         wrap: wrapOn(this.kind),
         onRun: this.opts.onRun,
         onBlockedEdit: this.opts.onBlockedEdit,
+        onHistory: sendHistory,
         onChange: (t) => {
           this.lastText = t;
           this.pending?.();
@@ -162,7 +179,14 @@ class Field {
     }
     this.box.setEditable(vm.editable && !!this.opts.editable);
     if (this.box.rev !== vm.rev) {
-      if (!(this.box.focused && this.box.text === text)) this.box.setContent(text, vm.startLine);
+      // Typing not sent yet, or an edit the host hasn't applied: that edit will replace the file anyway, so the
+      // box keeps what the user typed rather than showing older text.
+      const busy = !!this.pending?.pending() || (vm.seq ?? 0) < this.sentSeq;
+      if (this.box.rev === -1) this.box.setContent(text, vm.startLine);
+      else if (vm.echo) {
+        // Our own edit coming back; only if the box somehow differs (and nothing newer is on the way) adopt it.
+        if (!busy && withNewline(this.box.text) !== raw) this.box.setContent(text, vm.startLine);
+      } else if (!busy && !(this.box.focused && withNewline(this.box.text) === raw)) this.box.setContent(text, vm.startLine);
       this.box.rev = vm.rev;
     }
     this.box.setMarks(marks);
@@ -292,7 +316,7 @@ class Card {
       title: 'Input',
       editable: true,
       placeholder: 'input',
-      onEdit: (t) => send({ type: 'edit', key, field: 'in', text: t, file: currentFile }),
+      onEdit: (t, seq) => send({ type: 'edit', key, field: 'in', text: t, file: currentFile, seq }),
       onRun: () => send({ type: 'runCase', key }),
       onOpen: () => send({ type: 'open', key, field: 'in' }),
       onBlockedEdit: () => this.nudgeKeep(),
@@ -301,7 +325,7 @@ class Card {
       title: 'Expected',
       editable: true,
       placeholder: 'expected output',
-      onEdit: (t) => send({ type: 'edit', key, field: 'ans', text: t, file: currentFile }),
+      onEdit: (t, seq) => send({ type: 'edit', key, field: 'ans', text: t, file: currentFile, seq }),
       onRun: () => send({ type: 'runCase', key }),
       onOpen: () => send({ type: 'open', key, field: 'ans' }),
       onBlockedEdit: () => this.nudgeKeep(),
@@ -573,7 +597,17 @@ function renderCases(s: ViewState): void {
   }
   casesEl.querySelector('.no-cases')?.remove();
   if (!s.cases.length && s.file) {
-    casesEl.append(h('div', { class: 'no-cases' }, 'No test cases yet. ', h('a', { href: '#', onclick: (e: Event) => (e.preventDefault(), send({ type: 'addCase' })) }, 'Add one'), s.importBtn.enabled ? ' or import the samples (Ctrl+Shift+I).' : '.'));
+    const n = s.fileCases.length;
+    casesEl.append(
+      h(
+        'div',
+        { class: 'no-cases' },
+        'No test cases yet. ',
+        h('a', { href: '#', onclick: (e: Event) => (e.preventDefault(), send({ type: 'addCase' })) }, 'Add one'),
+        s.importBtn.enabled ? ' or import the samples (Ctrl+Shift+I).' : '.',
+        n ? h('div', {}, `${n} text file${n === 1 ? '' : 's'} here look${n === 1 ? 's' : ''} like a test: `, h('a', { href: '#', onclick: (e: Event) => (e.preventDefault(), setFilesMenu(true)) }, 'choose from Files'), '.') : '',
+      ),
+    );
   }
 }
 
@@ -582,8 +616,9 @@ function renderCases(s: ViewState): void {
 let headerSig = '';
 function renderHeader(s: ViewState): void {
   // Runs re-render often; rebuilding the header each time would eat clicks on Stop.
-  const sig = JSON.stringify([s.file, s.problem && { ...s.problem, dirFiles: 0, compileCandidates: 0 }, s.running, s.importBtn, s.submitBtn, s.ui.settingsOpen]);
-  if (sig === headerSig) return;
+  const g = s.stress.gen;
+  const sig = JSON.stringify([s.file, s.problem && { ...s.problem, dirFiles: 0, compileCandidates: 0 }, s.running, s.importBtn, s.submitBtn, s.ui.settingsOpen, g.canRun, g.running, g.genName, g.targetName, g.reason]);
+  if (sig === headerSig) return updateFilesButton(s);
   headerSig = sig;
   if (!s.file || !s.problem) {
     hdr.replaceChildren(h('div', { class: 'title-row' }, h('span', { class: 'muted' }, 'cp2')));
@@ -602,6 +637,11 @@ function renderHeader(s: ViewState): void {
     { class: 'btn-row' },
     s.running ? btn('Stop', 'debug-stop', () => send({ type: 'stop' }), { cls: 'danger' }) : btn('Run all', 'play', () => send({ type: 'runAll' }), { title: 'Run all test cases (Ctrl+Shift+R)', cls: 'primary' }),
     btn('Case', 'add', () => send({ type: 'addCase' }), { title: 'Add a test case' }),
+    btn('Gen case', g.running ? 'loading codicon-modifier-spin' : 'sparkle', () => send({ type: 'genCase' }), {
+      title: g.canRun ? `Add a test case to ${g.targetName} generated by ${g.genName} (a random seed is passed as argv[1])` : g.genName ? `Can't generate: ${g.reason ?? ''}` : 'Link a generator under "Generate test case" at the bottom (Set up makes gen.cpp)',
+      disabled: !g.canRun || g.running,
+    }),
+    filesButton(),
   );
   const row2 = h(
     'div',
@@ -610,6 +650,7 @@ function renderHeader(s: ViewState): void {
     btn(s.submitBtn.label, 'cloud-upload', () => send({ type: 'submit' }), { title: s.submitBtn.title, disabled: !s.submitBtn.enabled, cls: 'grow' }),
   );
   hdr.replaceChildren(title, row1, row2);
+  updateFilesButton(s);
   if (s.importBtn.note) hdr.append(h('div', { class: 'import-note' }, icon('info'), ' ', s.importBtn.note));
   if (p.verdict) {
     const v = p.verdict;
@@ -618,6 +659,168 @@ function renderHeader(s: ViewState): void {
     hdr.append(chip);
   }
 }
+
+// ---------------- Files menu (text-file cases) ----------------
+
+let filesMenuOpen = false;
+let filesMenuSig = '';
+
+function filesButton(): HTMLButtonElement {
+  const b = btn('Files', 'files', () => setFilesMenu(!filesMenuOpen), { cls: 'files-btn' });
+  b.append(icon('chevron-down'));
+  return b;
+}
+
+/** Label, enabled state and the open look change in place (rebuilding the header would eat clicks). */
+function updateFilesButton(s: ViewState): void {
+  const b = hdr.querySelector<HTMLButtonElement>('.files-btn');
+  if (!b) return;
+  const all = s.fileCases;
+  const label = all.length ? `Files ${all.filter((f) => f.shown).length}/${all.length}` : 'Files';
+  const text = b.querySelector('.btn-label');
+  if (text && text.textContent !== label) text.textContent = label;
+  b.disabled = !all.length;
+  b.title = all.length ? 'Text files here that look like test cases: choose which ones to show' : 'No text files here that look like test cases (in, in2, a.in, a-in.txt, …)';
+  b.classList.toggle('active', filesMenuOpen);
+}
+
+function setFilesMenu(open: boolean): void {
+  if (open === filesMenuOpen) return;
+  filesMenuOpen = open;
+  if (!state) return;
+  updateFilesButton(state);
+  renderFilesMenu(state);
+  if (open) filesMenu.querySelector<HTMLElement>('.fm-row')?.focus();
+}
+
+function renderFilesMenu(s: ViewState): void {
+  if (filesMenuOpen && (!s.file || !s.fileCases.length)) setFilesMenu(false);
+  if (!filesMenuOpen) {
+    filesMenu.hidden = true;
+    filesMenuSig = '';
+    return;
+  }
+  const sig = JSON.stringify(s.fileCases);
+  if (sig !== filesMenuSig) {
+    filesMenuSig = sig;
+    // Rows are rebuilt; keep the keyboard on the one that had it.
+    const focused = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>('.fm-row')?.dataset.name;
+    const show = (names: string[], on: boolean) => names.length && send({ type: 'showFiles', names, show: on });
+    const hidden = s.fileCases.filter((f) => !f.shown).map((f) => f.name);
+    const shown = s.fileCases.filter((f) => f.shown).map((f) => f.name);
+    const link = (label: string, names: string[], on: boolean) => {
+      const a = h('a', { href: '#', class: names.length ? '' : 'off' }, label);
+      a.addEventListener('click', (e) => (e.preventDefault(), show(names, on)));
+      return a;
+    };
+    const rows = s.fileCases.map((f) => {
+      const row = h(
+        'div',
+        { class: `fm-row ${f.shown ? 'on' : ''}`, 'data-name': f.name, role: 'menuitemcheckbox', 'aria-checked': String(f.shown), tabindex: 0, title: f.shown ? 'Shown as a test case: click to hide' : 'Click to show as a test case' },
+        h('span', { class: 'fm-check' }, f.shown ? icon('check') : ''),
+        h('span', { class: 'fm-name' }, f.name),
+        h('span', { class: `fm-ans ${f.expected ? '' : 'none'}` }, f.expected ? `→ ${f.expected}` : 'no answer'),
+      );
+      row.addEventListener('click', () => send({ type: 'showFiles', names: [f.name], show: !f.shown }));
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          row.click();
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          ((e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling) as HTMLElement | null)?.focus();
+        }
+      });
+      return row;
+    });
+    filesMenu.replaceChildren(
+      h('div', { class: 'fm-head' }, h('span', { class: 'fm-title' }, 'Text files here'), link('show all', hidden, true), link('hide all', shown, false)),
+      h('div', { class: 'fm-list' }, ...rows),
+      h('div', { class: 'fm-foot' }, 'Shown files run with Run all. They are read-only: Keep makes an editable copy.'),
+    );
+    if (focused) [...filesMenu.querySelectorAll<HTMLElement>('.fm-row')].find((r) => r.dataset.name === focused)?.focus();
+  }
+  // Under the button, kept inside the sidebar.
+  const b = hdr.querySelector<HTMLElement>('.files-btn');
+  const ar = app.getBoundingClientRect();
+  const w = Math.min(320, ar.width - 12);
+  filesMenu.style.width = `${w}px`;
+  if (b) {
+    const r = b.getBoundingClientRect();
+    filesMenu.style.top = `${r.bottom - ar.top + 3}px`;
+    filesMenu.style.left = `${Math.max(6, Math.min(r.right - ar.left - w, ar.width - w - 6))}px`;
+  }
+  filesMenu.hidden = false;
+}
+
+document.addEventListener('mousedown', (e) => {
+  const t = e.target as Element;
+  if (filesMenuOpen && !filesMenu.contains(t) && !t.closest?.('.files-btn')) setFilesMenu(false);
+});
+
+// ---------------- notices (undo / redo feedback) ----------------
+
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+/** `id`: the history step the Undo / Redo button stands for (the host ignores it if newer steps came after). */
+function showNotice(text: string, action?: 'undo' | 'redo', id?: number): void {
+  const parts: (HTMLElement | string)[] = [h('span', { class: 'notice-text' }, text)];
+  if (action) parts.push(btn(action === 'undo' ? 'Undo' : 'Redo', action === 'undo' ? 'discard' : 'redo', () => ((noticeEl.hidden = true), sendHistory(action, id)), { cls: 'tiny text', title: action === 'undo' ? 'Ctrl+Z' : 'Ctrl+R / Ctrl+Y' }));
+  parts.push(btn(null, 'close', () => (noticeEl.hidden = true), { cls: 'tiny', title: 'Dismiss' }));
+  noticeEl.replaceChildren(...parts);
+  noticeEl.hidden = false;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => (noticeEl.hidden = true), action ? 6000 : 2500);
+}
+
+// Edit > Undo / Redo (and keys we didn't catch) arrive as document.execCommand('undo') from VS Code's webview host,
+// which doesn't fire beforeinput, so CodeMirror would do a native undo: route those to the sidebar's history instead.
+const nativeExec = document.execCommand.bind(document);
+document.execCommand = ((command: string, ui?: boolean, value?: string) => {
+  if ((command === 'undo' || command === 'redo') && !isTextInput(document.activeElement)) {
+    sendHistory(command);
+    return true;
+  }
+  return nativeExec(command, ui, value);
+}) as typeof document.execCommand;
+
+function isTextInput(t: EventTarget | null): boolean {
+  if (t instanceof HTMLTextAreaElement) return true;
+  return t instanceof HTMLInputElement && ['text', 'number', 'search', 'email', 'url', 'tel', 'password'].includes(t.type);
+}
+
+/** Sends typing that is still waiting for its pause (before runs, undo, VS Code shortcuts). */
+function flushEdits(): void {
+  for (const c of cards.values()) c.flush();
+}
+
+function sendHistory(dir: 'undo' | 'redo', id?: number): void {
+  if (!state?.file) return;
+  // send() flushes typing that hasn't been sent yet: it's part of what gets undone.
+  send({ type: dir, file: currentFile, id });
+}
+
+// Capture phase on window: runs before CodeMirror's keymaps and before VS Code's own listener (which forwards keys to
+// the workbench in the bubble phase), so Ctrl+R doesn't open "Open Recent" and Ctrl+Z doesn't also undo through VS Code.
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (e.isComposing || e.altKey || !(e.ctrlKey || e.metaKey)) return;
+    // Letters by their meaning; on non-Latin layouts (Ctrl+Я) by the key's position, like VS Code does.
+    const k = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : ({ 90: 'z', 89: 'y', 82: 'r' } as Record<number, string>)[e.keyCode] ?? '';
+    const dir = k === 'z' ? (e.shiftKey ? 'redo' : 'undo') : (k === 'y' || k === 'r') && !e.shiftKey ? 'redo' : null;
+    if (!dir || !state?.file) {
+      // Possibly a VS Code shortcut (Ctrl+Shift+R runs everything): let it see the latest typing.
+      flushEdits();
+      return;
+    }
+    // Plain text inputs (time limit, the manual-run box) keep their own Ctrl+Z / Ctrl+Y.
+    if (k !== 'r' && isTextInput(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.repeat) sendHistory(dir);
+  },
+  true,
+);
 
 // ---------------- settings ----------------
 
@@ -740,7 +943,11 @@ function closeSettings(): void {
   if (state?.ui.settingsOpen) send({ type: 'toggleSettings', open: false });
 }
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !settingsEl.hidden) closeSettings();
+  if (e.key !== 'Escape') return;
+  if (filesMenuOpen) {
+    setFilesMenu(false);
+    hdr.querySelector<HTMLElement>('.files-btn')?.focus();
+  } else if (!settingsEl.hidden) closeSettings();
 });
 
 // ---------------- compile box & warnings ----------------
@@ -832,9 +1039,9 @@ function drawManual(): void {
 // ---------------- stress footer ----------------
 
 const SHRINK = ['0', '0.2 s', '0.5 s', '1 s', '2 s', '5 s', '10 s'];
-const stressEls: Record<'wa' | 're', HTMLDetailsElement> = { wa: h('details', { class: 'stress-sec' }), re: h('details', { class: 'stress-sec' }) };
-footer.append(stressEls.wa, stressEls.re);
-for (const mode of ['wa', 're'] as const) {
+const stressEls: Record<SectionMode, HTMLDetailsElement> = { gen: h('details', { class: 'stress-sec gen-sec' }), wa: h('details', { class: 'stress-sec' }), re: h('details', { class: 'stress-sec' }) };
+footer.append(stressEls.gen, stressEls.wa, stressEls.re);
+for (const mode of ['gen', 'wa', 're'] as const) {
   stressEls[mode].addEventListener('toggle', () => {
     const open = stressEls[mode].open;
     if (state && state.stress[mode].open !== open) send({ type: 'stressOpen', mode, open });
@@ -842,11 +1049,12 @@ for (const mode of ['wa', 're'] as const) {
 }
 let shrinkDragging = false;
 /** Structure each section was last built for, and the texts that change in place while it runs. */
-const stressSig: Record<'wa' | 're', string> = { wa: '', re: '' };
+const stressSig: Record<SectionMode, string> = { gen: '', wa: '', re: '' };
 const stressLive: Record<'wa' | 're', { chip: HTMLElement | null; status: HTMLElement | null }> = { wa: { chip: null, status: null }, re: { chip: null, status: null } };
 
 function renderStress(s: ViewState): void {
   footer.hidden = !s.file;
+  renderGenSection(s.stress.gen);
   for (const mode of ['wa', 're'] as const) {
     const sec = s.stress[mode];
     const el = stressEls[mode];
@@ -910,6 +1118,36 @@ function renderStress(s: ViewState): void {
   }
 }
 
+/** "Generate test case": gen (+ optional answer brute), Set up, Gen case. */
+function renderGenSection(sec: GenSectionVM): void {
+  const el = stressEls.gen;
+  if (el.open !== sec.open) el.open = sec.open;
+  const sig = JSON.stringify(sec);
+  if (sig === stressSig.gen) return;
+  stressSig.gen = sig;
+  const st = sec.status;
+  const busy = st?.state === 'compiling' || st?.state === 'running';
+  const chip = st ? h('span', { class: `chip st-${st.state}` }, busy ? icon('loading codicon-modifier-spin') : '', ' ', st.state === 'compiling' ? 'compiling' : st.state === 'running' ? 'generating' : st.state === 'error' ? 'error' : 'added') : !sec.canRun ? h('span', { class: 'chip st-missing' }, 'not linked') : '';
+  const genBtn = (text: boolean) =>
+    btn(text ? 'Gen case' : null, sec.running ? 'loading codicon-modifier-spin' : 'sparkle', () => send({ type: 'genCase' }), {
+      title: sec.canRun ? 'Add a test case generated by the gen (a random seed is passed as argv[1])' : (sec.reason ?? ''),
+      disabled: !sec.canRun || sec.running,
+      cls: text ? 'tiny text primary' : 'tiny',
+    });
+  const summary = h('summary', {}, icon('chevron-right'), h('span', { class: 'sec-title' }, 'Generate test case'), chip, genBtn(false));
+  const body = h('div', { class: 'sec-body' });
+  for (const slot of sec.slots) body.append(slotRow('gen', slot));
+  const actions = h('div', { class: 'row actions' });
+  if (sec.needsSetup) actions.append(btn('Set up', 'wand', () => send({ type: 'stressSetup', mode: 'gen' }), { title: 'Move this file into its own folder and create gen.cpp', cls: 'tiny text' }));
+  actions.append(genBtn(true));
+  body.append(actions);
+  if (st) {
+    body.append(h('div', { class: `stress-status st-${st.state}` }, st.text));
+    if (st.detail) body.append(h('pre', { class: 'stress-detail' }, st.detail));
+  }
+  el.replaceChildren(summary, body);
+}
+
 function shortStatus(sec: StressSectionVM): string {
   const st = sec.status!;
   if (st.state === 'running') return st.text.split(' · ')[0];
@@ -921,14 +1159,15 @@ function shortStatus(sec: StressSectionVM): string {
   return 'error';
 }
 
-function slotRow(mode: 'wa' | 're', slot: SlotVM): HTMLElement {
-  const opts: [string, string][] = [['', '—']];
+function slotRow(mode: SectionMode, slot: SlotVM): HTMLElement {
+  const opts: [string, string][] = [['', slot.optional ? '(none)' : '—']];
   for (const f of slot.options) opts.push([f, f]);
   const sel = select(opts, slot.value, (v) => send({ type: 'stressPick', mode, role: slot.role, value: v }));
   sel.classList.toggle('auto', slot.auto && !!slot.value);
   sel.classList.toggle('missing', slot.missing);
   const row = h('div', { class: 'row' }, h('label', {}, slot.role), sel);
-  if (slot.missing && slot.value && (slot.role === 'checker' || slot.role === 'judge')) row.append(h('span', { class: 'hint warn' }, 'not created yet'));
+  if (slot.role === 'answer') row.title = 'Optional: a brute whose output on the generated input becomes the expected output';
+  if (slot.missing && slot.value && (slot.role === 'checker' || slot.role === 'judge' || slot.role === 'answer')) row.append(h('span', { class: 'hint warn' }, 'not found'));
   else if (slot.auto && slot.value) row.append(h('span', { class: 'hint' }, 'auto'));
   return row;
 }
@@ -957,7 +1196,12 @@ function compareRow(mode: 'wa' | 're', sec: StressSectionVM): HTMLElement {
 // ---------------- main render ----------------
 
 function render(s: ViewState): void {
-  if (currentFile && s.file?.path !== currentFile) for (const c of cards.values()) c.flush();
+  if (currentFile && s.file?.path !== currentFile) {
+    for (const c of cards.values()) c.flush();
+    filesMenuOpen = false;
+    noticeEl.hidden = true; // its Undo was about the other file
+    pendingReveal = null;
+  }
   currentFile = s.file?.path ?? '';
   state = s;
   document.body.classList.toggle('no-file', !s.file);
@@ -970,6 +1214,8 @@ function render(s: ViewState): void {
   renderManual(s);
   renderCases(s);
   renderStress(s);
+  renderFilesMenu(s);
+  applyReveal();
 }
 
 window.addEventListener('message', (e: MessageEvent<ToWebview>) => {
@@ -983,17 +1229,33 @@ window.addEventListener('message', (e: MessageEvent<ToWebview>) => {
     manualLines.push(...m.events);
     if (state?.manual.visible) drawManual();
   } else if (m.type === 'reveal') {
-    const c = cards.get(m.key);
-    if (c) {
-      c.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      c.el.classList.add('flash');
-      setTimeout(() => c.el.classList.remove('flash'), 900);
-      if (m.key.startsWith('s:')) c.focusInput();
-    }
+    // The state with the new card may still be on its way: try again after the next renders.
+    pendingReveal = { m, until: Date.now() + 3000 };
+    applyReveal();
+  } else if (m.type === 'notice') {
+    showNotice(m.text, m.action, m.id);
   }
 });
 
+let pendingReveal: { m: Extract<ToWebview, { type: 'reveal' }>; until: number } | null = null;
+function applyReveal(): void {
+  if (!pendingReveal) return;
+  const { m, until } = pendingReveal;
+  const c = cards.get(m.key);
+  if (!c) {
+    if (Date.now() > until) pendingReveal = null;
+    return;
+  }
+  pendingReveal = null;
+  if (m.expand || m.focus) c.setCollapsed(false);
+  c.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  c.el.classList.add('flash');
+  setTimeout(() => c.el.classList.remove('flash'), 900);
+  if (m.focus) c.focusInput();
+}
+
 window.addEventListener('blur', () => {
+  setFilesMenu(false);
   for (const c of cards.values()) c.flush();
 });
 

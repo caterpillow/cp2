@@ -3,7 +3,7 @@
 
 import { Compartment, EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, drawSelection, EditorView, keymap, lineNumbers, placeholder as cmPlaceholder } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { defaultKeymap } from '@codemirror/commands';
 
 export interface Mark {
   line: number; // 1-based, in file numbering
@@ -22,6 +22,8 @@ export interface BoxOptions {
   onRun?: () => void;
   /** Typing, pasting or deleting in a read-only box. */
   onBlockedEdit?: () => void;
+  /** Undo / redo from the Edit menu (keys are handled for the whole sidebar). */
+  onHistory?: (dir: 'undo' | 'redo') => void;
   className?: string;
 }
 
@@ -84,9 +86,9 @@ export class TextBox {
         extensions: [
           this.gutterC.of(this.gutter()),
           drawSelection(),
-          history(),
           runKeys,
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          // No per-box history: undo / redo are the sidebar's (cases, deletions and typing in one list).
+          keymap.of(defaultKeymap),
           this.readonlyC.of(this.ro(opts.editable)),
           this.wrapC.of(opts.wrap ? EditorView.lineWrapping : []),
           opts.placeholder ? cmPlaceholder(opts.placeholder) : [],
@@ -101,6 +103,12 @@ export class TextBox {
             paste: (_e, view) => {
               if (view.state.readOnly) this.opts.onBlockedEdit?.();
               return false;
+            },
+            beforeinput: (e) => {
+              if (e.inputType !== 'historyUndo' && e.inputType !== 'historyRedo') return false;
+              e.preventDefault();
+              this.opts.onHistory?.(e.inputType === 'historyUndo' ? 'undo' : 'redo');
+              return true;
             },
           }),
           EditorView.updateListener.of((u) => {
@@ -129,15 +137,23 @@ export class TextBox {
   }
 
   setContent(text: string, startLine = 1): void {
+    // The doc keeps lines with \n; diffing against \r\n would insert stray \r (= extra lines).
+    text = text.replace(/\r\n?/g, '\n');
     if (startLine !== this.startLine) {
       this.startLine = startLine;
       this.view.dispatch({ effects: this.gutterC.reconfigure(this.gutter()) });
     }
     const cur = this.view.state.doc.toString();
     if (cur === text) return;
+    // Replace only the part that differs, so the cursor and scroll position survive (undo, external edits).
+    let a = 0;
+    const max = Math.min(cur.length, text.length);
+    while (a < max && cur.charCodeAt(a) === text.charCodeAt(a)) a++;
+    let b = 0;
+    while (b < max - a && cur.charCodeAt(cur.length - 1 - b) === text.charCodeAt(text.length - 1 - b)) b++;
     this.suppress = true;
     try {
-      this.view.dispatch({ changes: { from: 0, to: this.view.state.doc.length, insert: text } });
+      this.view.dispatch({ changes: { from: a, to: cur.length - b, insert: text.slice(a, text.length - b) } });
     } finally {
       this.suppress = false;
     }

@@ -257,7 +257,13 @@ export class Integrations implements Extras, vscode.Disposable {
       this.decorations.set(file, undefined);
       p.meta.autoImported = false;
     }
-    if (tests.length || !data.note) await p.replaceImported(tests);
+    if (tests.length || !data.note) {
+      // Not an undo step: an import also relinks the file (name, limits, verdict), which undo couldn't put back.
+      await this.c.serial(async () => {
+        await p.replaceImported(tests);
+        this.c.forgetHistory(file);
+      });
+    }
     if (data.anonymous) {
       // Samples only: the file isn't linked to anything (and keeps no name from a judge).
       p.meta.binding = undefined;

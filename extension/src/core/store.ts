@@ -86,7 +86,8 @@ export interface ProblemMeta {
   /** Display order of case keys ("s:<id>" stored, "f:<name>" text-file cases). */
   order: string[];
   pinned: string[];
-  hiddenFiles: string[];
+  /** Text-file cases (input file names) shown in the sidebar; the folder's other matches are only listed under Files. */
+  shownFiles: string[];
   verdict?: VerdictState;
   /** Where the snippet's $0 was, so the first open puts the cursor there. */
   snippetCursor?: { line: number; character: number };
@@ -96,7 +97,26 @@ export interface ProblemMeta {
 }
 
 export function emptyMeta(): ProblemMeta {
-  return { version: 1, settings: { ...DEFAULT_SETTINGS }, cases: [], order: [], pinned: [], hiddenFiles: [] };
+  return { version: 1, settings: { ...DEFAULT_SETTINGS }, cases: [], order: [], pinned: [], shownFiles: [] };
+}
+
+/** The parts of a problem that undo / redo restore. */
+export interface ListState {
+  cases: StoredCase[];
+  order: string[];
+  pinned: string[];
+  shownFiles: string[];
+}
+
+/** Files of deleted cases are kept this long, so undo can bring the cases back (also from another window). */
+const TRASH_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+
+/** "Sample 2" / "Case 3" as the sidebar shows it. */
+export function caseLabel(meta: ProblemMeta, id: string): string {
+  const c = meta.cases.find((x) => x.id === id);
+  if (!c) return 'a case';
+  if (c.origin === 'imported') return `Sample ${c.sample ?? ''}`.trim();
+  return `Case ${meta.cases.filter((x) => x.origin === 'manual').findIndex((x) => x.id === id) + 1}`;
 }
 
 export const storedKey = (id: string) => `s:${id}`;
@@ -226,6 +246,7 @@ export class Problem {
     if (raw) {
       const p = new Problem(file, store, normalizeMeta(raw));
       p.materialized = true;
+      void p.emptyTrash(TRASH_MAX_AGE_MS);
       return p;
     }
     const p = new Problem(file, store, emptyMeta());
@@ -247,6 +268,92 @@ export class Problem {
 
   caseFile(id: string, kind: 'in' | 'ans'): string {
     return path.join(this.dir, `${id}.${kind}`);
+  }
+
+  private trashFile(id: string, kind: 'in' | 'ans'): string {
+    return path.join(this.dir, '.trash', `${id}.${kind}`);
+  }
+
+  /** Moves a removed case's files aside (undo brings them back; old ones are cleared on load). */
+  private async trashCase(id: string): Promise<void> {
+    for (const kind of ['in', 'ans'] as const) {
+      const src = this.caseFile(id, kind);
+      if (!(await exists(src))) continue;
+      const dst = this.trashFile(id, kind);
+      await mkdirp(path.dirname(dst));
+      await fsp.rename(src, dst);
+      const now = new Date();
+      await fsp.utimes(dst, now, now).catch(() => undefined);
+    }
+  }
+
+  private async untrashCase(id: string): Promise<void> {
+    for (const kind of ['in', 'ans'] as const) {
+      const dst = this.caseFile(id, kind);
+      if (!(await exists(dst))) await fsp.rename(this.trashFile(id, kind), dst);
+    }
+  }
+
+  /** Cases of `cases` that aren't here now and whose files are gone (neither in place nor in the trash). */
+  async lostCases(cases: StoredCase[]): Promise<StoredCase[]> {
+    const lost: StoredCase[] = [];
+    for (const c of cases) {
+      if (this.findCase(c.id)) continue;
+      for (const kind of ['in', 'ans'] as const) {
+        if ((await exists(this.caseFile(c.id, kind))) || (await exists(this.trashFile(c.id, kind)))) continue;
+        lost.push(c);
+        break;
+      }
+    }
+    return lost;
+  }
+
+  async emptyTrash(maxAgeMs: number): Promise<void> {
+    const dir = path.join(this.dir, '.trash');
+    let names: string[];
+    try {
+      names = await fsp.readdir(dir);
+    } catch {
+      return;
+    }
+    const cutoff = Date.now() - maxAgeMs;
+    let left = names.length;
+    for (const n of names) {
+      const st = await fsp.stat(path.join(dir, n)).catch(() => null);
+      if (st && st.mtimeMs >= cutoff) continue;
+      await fsp.rm(path.join(dir, n), { force: true }).catch(() => undefined);
+      left--;
+    }
+    if (!left) await fsp.rmdir(dir).catch(() => undefined);
+  }
+
+  /** Copy of what undo / redo restore. */
+  listState(): ListState {
+    const m = this.meta;
+    return { cases: m.cases.map((c) => ({ ...c })), order: [...m.order], pinned: [...m.pinned], shownFiles: [...m.shownFiles] };
+  }
+
+  /**
+   * Restores (part of) an earlier list state. Cases that come back get their files back from the trash; cases that go
+   * away are trashed. `shown` adds / removes single names instead of replacing the list, so files shown in the meantime
+   * (the stress `in`) stay.
+   */
+  async applyListState(st: Partial<Omit<ListState, 'shownFiles'>>, shown?: { add: string[]; remove: string[] }): Promise<void> {
+    if (st.cases) {
+      const now = new Set(this.meta.cases.map((c) => c.id));
+      const next = new Set(st.cases.map((c) => c.id));
+      await this.store.ensure();
+      for (const id of now) if (!next.has(id)) await this.trashCase(id);
+      for (const id of next) if (!now.has(id)) await this.untrashCase(id);
+      this.meta.cases = st.cases.map((c) => ({ ...c }));
+    }
+    if (st.order) this.meta.order = [...st.order];
+    if (st.pinned) this.meta.pinned = [...st.pinned];
+    if (shown) {
+      this.meta.shownFiles = this.meta.shownFiles.filter((n) => !shown.remove.includes(n));
+      for (const n of shown.add) if (!this.meta.shownFiles.includes(n)) this.meta.shownFiles.push(n);
+    }
+    this.scheduleSave();
   }
 
   findCase(id: string): StoredCase | undefined {
@@ -283,19 +390,34 @@ export class Problem {
     const k = storedKey(id);
     this.meta.order = this.meta.order.filter((x) => x !== k);
     this.meta.pinned = this.meta.pinned.filter((x) => x !== k);
-    await Promise.all([fsp.rm(this.caseFile(id, 'in'), { force: true }), fsp.rm(this.caseFile(id, 'ans'), { force: true })]);
+    await this.trashCase(id);
     this.scheduleSave();
+  }
+
+  /** A new manual case from files on disk (generated tests can be big: they never pass through a string). */
+  async addCaseFromFiles(input: string, expected: string | null, afterKey?: string): Promise<StoredCase> {
+    const c: StoredCase = { id: randomId(8), origin: 'manual' };
+    await this.store.ensure();
+    await mkdirp(this.dir);
+    await fsp.copyFile(input, this.caseFile(c.id, 'in'));
+    if (expected) await fsp.copyFile(expected, this.caseFile(c.id, 'ans'));
+    else await atomicWrite(this.caseFile(c.id, 'ans'), '');
+    this.meta.cases.push(c);
+    this.placeAfter(storedKey(c.id), afterKey);
+    this.scheduleSave();
+    return c;
+  }
+
+  private placeAfter(k: string, afterKey?: string): void {
+    this.meta.order = this.meta.order.filter((x) => x !== k);
+    const i = afterKey ? this.meta.order.indexOf(afterKey) : -1;
+    this.meta.order.splice(i < 0 ? this.meta.order.length : i + 1, 0, k);
   }
 
   /** Clones a case (or any input/expected pair) into a new manual case placed after `afterKey`. */
   async addManualAfter(input: string, expected: string, afterKey?: string): Promise<StoredCase> {
     const c = await this.addCase('manual', input, expected, 'end');
-    if (afterKey) {
-      const k = storedKey(c.id);
-      this.meta.order = this.meta.order.filter((x) => x !== k);
-      const i = this.meta.order.indexOf(afterKey);
-      this.meta.order.splice(i < 0 ? this.meta.order.length : i + 1, 0, k);
-    }
+    if (afterKey) this.placeAfter(storedKey(c.id), afterKey);
     return c;
   }
 
@@ -325,7 +447,7 @@ export class Problem {
     });
     this.meta.pinned = pinOrder.filter((k) => k);
     this.meta.cases = [...this.meta.cases.filter((c) => c.origin !== 'imported'), ...fresh];
-    await Promise.all(old.flatMap((c) => [fsp.rm(this.caseFile(c.id, 'in'), { force: true }), fsp.rm(this.caseFile(c.id, 'ans'), { force: true })]));
+    for (const c of old) await this.trashCase(c.id);
     this.scheduleSave();
   }
 
@@ -345,10 +467,15 @@ export class Problem {
     this.scheduleSave();
   }
 
-  hideFile(name: string): void {
-    if (!this.meta.hiddenFiles.includes(name)) this.meta.hiddenFiles.push(name);
-    const k = fileKey(name);
-    this.meta.pinned = this.meta.pinned.filter((x) => x !== k);
+  /** Shows or hides a text-file case (hiding also unpins it). */
+  showFile(name: string, on: boolean): void {
+    if (on) {
+      if (!this.meta.shownFiles.includes(name)) this.meta.shownFiles.push(name);
+    } else {
+      this.meta.shownFiles = this.meta.shownFiles.filter((n) => n !== name);
+      const k = fileKey(name);
+      this.meta.pinned = this.meta.pinned.filter((x) => x !== k);
+    }
     this.scheduleSave();
   }
 
@@ -363,7 +490,7 @@ export class Problem {
     return (
       !m.cases.length &&
       !m.pinned.length &&
-      !m.hiddenFiles.length &&
+      !m.shownFiles.length &&
       !m.binding &&
       !m.name &&
       !m.verdict &&
@@ -413,7 +540,9 @@ function normalizeMeta(raw: Partial<ProblemMeta>): ProblemMeta {
   m.cases = Array.isArray(raw.cases) ? raw.cases : [];
   m.order = Array.isArray(raw.order) ? raw.order : [];
   m.pinned = Array.isArray(raw.pinned) ? raw.pinned : [];
-  m.hiddenFiles = Array.isArray(raw.hiddenFiles) ? raw.hiddenFiles : [];
+  // Before 0.3 every text-file case was shown unless hidden; now they're opt-in. Keep the pinned ones.
+  m.shownFiles = Array.isArray(raw.shownFiles) ? raw.shownFiles : m.pinned.filter(isFileKey).map(keyId);
+  delete (m as { hiddenFiles?: unknown }).hiddenFiles;
   return m;
 }
 
@@ -445,11 +574,13 @@ export interface StressPicks {
 
 export interface DirMeta {
   version: 2;
+  /** "Generate test case": gen, and brute = the optional answer program. */
+  gen: StressPicks;
   wa: StressPicks;
   re: StressPicks;
   /** Index into SHRINK_STEPS for each mode; unset until the slider is moved (then cp2.stress.shrinkSeconds applies). */
   shrink: { wa?: number; re?: number };
-  open: { wa: boolean; re: boolean };
+  open: { gen: boolean; wa: boolean; re: boolean };
   /** mtime of the `ans` file last written by WA stress (lets RE stress clear it safely). */
   ansFromStress?: number;
 }
@@ -466,7 +597,7 @@ export function shrinkIndex(seconds: number): number {
 }
 
 export function emptyDirMeta(): DirMeta {
-  return { version: 2, wa: {}, re: {}, shrink: {}, open: { wa: false, re: false } };
+  return { version: 2, gen: {}, wa: {}, re: {}, shrink: {}, open: { gen: false, wa: false, re: false } };
 }
 
 export async function loadDirMeta(store: Store, dir: string): Promise<DirMeta> {
@@ -474,6 +605,7 @@ export async function loadDirMeta(store: Store, dir: string): Promise<DirMeta> {
   const m = emptyDirMeta();
   if (raw) {
     Object.assign(m, raw);
+    m.gen = { ...(raw.gen ?? {}) };
     m.wa = { ...(raw.wa ?? {}) };
     m.re = { ...(raw.re ?? {}) };
     m.shrink = { ...(raw.shrink ?? {}) };
@@ -483,7 +615,7 @@ export async function loadDirMeta(store: Store, dir: string): Promise<DirMeta> {
       if (m.shrink.re === 0) delete m.shrink.re;
       m.version = 2;
     }
-    m.open = { wa: false, re: false, ...(raw.open ?? {}) };
+    m.open = { gen: false, wa: false, re: false, ...(raw.open ?? {}) };
   }
   return m;
 }

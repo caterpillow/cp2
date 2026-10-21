@@ -26,6 +26,7 @@ body {
 }
 
 #app {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -110,8 +111,19 @@ span.problem {
 
 .btn-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-top: 5px;
+}
+.btn.files-btn {
+  margin-left: auto;
+}
+.btn.files-btn.active {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+.btn.files-btn .codicon-chevron-down {
+  font-size: 12px;
+  margin-left: -2px;
 }
 .btn {
   display: inline-flex;
@@ -781,4 +793,113 @@ label.check {
 }
 .field-btns .btn.tiny.active {
   background: var(--vscode-toolbar-activeBackground, color-mix(in srgb, var(--vscode-focusBorder) 25%, transparent));
+}
+
+/* ---------- Files menu ---------- */
+#files-menu {
+  position: absolute;
+  z-index: 30;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background, var(--vscode-sideBar-background)));
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border, var(--border)));
+  border-radius: 4px;
+  box-shadow: 0 2px 10px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+}
+#files-menu[hidden] {
+  display: none;
+}
+.fm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.92em;
+}
+.fm-title {
+  flex: 1;
+  font-weight: 600;
+}
+.fm-head a {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: none;
+}
+.fm-head a.off {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.fm-list {
+  overflow-y: auto;
+  padding: 3px 0;
+}
+.fm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fm-row:hover,
+.fm-row:focus {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+  color: var(--vscode-menu-selectionForeground, inherit);
+  outline: none;
+}
+.fm-check {
+  width: 16px;
+  display: inline-flex;
+  flex: none;
+}
+.fm-name {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+.fm-ans {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fm-ans.none {
+  color: var(--warn);
+}
+.fm-foot {
+  padding: 5px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.88em;
+  white-space: normal;
+}
+
+/* ---------- notice (undo / redo) ---------- */
+#notice {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 10px;
+  background: var(--vscode-notifications-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-notifications-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-notifications-border, var(--vscode-editorWidget-border, var(--border)));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+}
+#notice[hidden] {
+  display: none;
+}
+.notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.no-cases div {
+  margin-top: 4px;
 }

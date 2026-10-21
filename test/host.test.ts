@@ -84,10 +84,25 @@ describe('controller', () => {
     h.integ.dispose();
   });
 
-  it('loads legacy cases and text-file cases', async () => {
+  it('loads legacy cases; text-file cases are listed under Files and shown on request', async () => {
     await h.c.setActive(path.join(root, 'p/a.cpp'));
-    const s = await h.state();
+    let s = await h.state();
     assert.equal(s.file?.name, 'a.cpp');
+    assert.deepEqual(
+      s.cases.map((c) => c.key).filter((k) => k.startsWith('f:')),
+      [],
+      'text files are not cases until shown',
+    );
+    assert.deepEqual(s.fileCases, [
+      { name: 'in', expected: 'ans', shown: false },
+      { name: 'in2', expected: null, shown: false },
+    ]);
+    await h.c.onMessage({ type: 'showFiles', names: ['in', 'in2'], show: true });
+    s = await h.state();
+    assert.deepEqual(
+      s.fileCases.map((f) => f.shown),
+      [true, true],
+    );
     assert.deepEqual(
       s.cases.map((c) => [c.origin, c.label]),
       [
@@ -155,6 +170,8 @@ describe('controller', () => {
     await h.c.onMessage({ type: 'hideCase', key: 'f:in2' });
     s = await h.state();
     assert.ok(!s.cases.some((c) => c.key === 'f:in2'));
+    assert.equal(s.fileCases.find((f) => f.name === 'in2')?.shown, false, 'still listed under Files');
+    assert.ok(h.posts.some((m) => m.type === 'notice' && /Hid in2/.test(m.text) && m.action === 'undo'));
   });
 
   it('first-line comparison mode applies to normal runs', async () => {
@@ -162,6 +179,7 @@ describe('controller', () => {
     await fsp.writeFile(path.join(root, 'p/ans3'), '8\nignored\n');
     fake.touch(path.join(root, 'p/in3'), 'create');
     await sleep(150);
+    await h.c.onMessage({ type: 'showFiles', names: ['in3'], show: true });
     await h.c.onMessage({ type: 'setting', patch: { compare: 'firstLine' } });
     await h.c.runAll();
     const s = await h.waitFor((x) => !x.running && x.cases.find((c) => c.key === 'f:in3')?.result?.verdict === 'AC');
@@ -180,6 +198,267 @@ describe('controller', () => {
   });
 });
 
+describe('undo / redo', () => {
+  it('undoes and redoes deleting, typing, Keep, showing and moving', async () => {
+    const root = await mkws({ 'u/a.cpp': DOUBLE, 'u/in': '5\n', 'u/ans': '10\n' });
+    const h = harness(root);
+    const file = path.join(root, 'u/a.cpp');
+    await h.c.setActive(file);
+    const caseDir = path.join(root, '.cp2/cases/u/a.cpp');
+    await h.c.onMessage({ type: 'addCase' });
+    await h.c.onMessage({ type: 'addCase' });
+    let s = await h.state();
+    const [k1, k2] = s.cases.map((c) => c.key);
+    const id1 = k1.slice(2);
+
+    // Typing: echoed back (with its text) so the sidebar never reverts the box; pauses < 1 s merge.
+    await h.c.onMessage({ type: 'edit', key: k1, field: 'in', text: '1\n', file });
+    await h.c.onMessage({ type: 'edit', key: k1, field: 'in', text: '12\n', file });
+    // What really goes to the webview (not h.state(), which resends every text): the typed text comes back once,
+    // flagged as an echo, so the webview updates its cache without touching the box.
+    h.posts.length = 0;
+    h.c.requestRender(0);
+    await sleep(60);
+    const posted = h.posts.filter((m): m is Extract<ToWebview, { type: 'state' }> => m.type === 'state').pop()!;
+    const typed = posted.state.cases.find((c) => c.key === k1)!.input;
+    assert.equal(typed.echo, true);
+    assert.equal(typed.text, '12\n');
+    await h.c.onMessage({ type: 'undo', file });
+    s = await h.state();
+    assert.equal(s.cases.find((c) => c.key === k1)!.input.text, '', 'both edits were one step');
+    assert.equal(s.cases.find((c) => c.key === k1)!.input.echo, undefined, 'an undo replaces the box');
+    await h.c.onMessage({ type: 'redo', file });
+    assert.equal(await fsp.readFile(path.join(caseDir, `${id1}.in`), 'utf8'), '12\n');
+
+    // An edit still in flight when Ctrl+Z arrives is applied first, then undone.
+    const pending = h.c.onMessage({ type: 'edit', key: k2, field: 'ans', text: 'zzz\n', file });
+    await h.c.onMessage({ type: 'undo', file });
+    await pending;
+    assert.equal(await fsp.readFile(path.join(caseDir, `${k2.slice(2)}.ans`), 'utf8'), '');
+
+    // Deleting keeps the files in the trash until it's undone.
+    await h.c.onMessage({ type: 'deleteCase', key: k1 });
+    s = await h.state();
+    assert.deepEqual(
+      s.cases.map((c) => c.key),
+      [k2],
+    );
+    assert.ok(fs.existsSync(path.join(caseDir, '.trash', `${id1}.in`)));
+    assert.ok(h.posts.some((m) => m.type === 'notice' && m.text === 'Deleted Case 1' && m.action === 'undo'));
+    await h.c.onMessage({ type: 'undo', file });
+    s = await h.state();
+    assert.deepEqual(
+      s.cases.map((c) => c.key),
+      [k1, k2],
+      'back in its place',
+    );
+    assert.equal(s.cases[0].input.text, '12\n');
+    await sleep(150); // reveal follows the render
+    assert.ok(h.posts.some((m) => m.type === 'reveal' && m.key === k1 && m.expand));
+    await h.c.onMessage({ type: 'redo', file });
+    s = await h.state();
+    assert.deepEqual(
+      s.cases.map((c) => c.key),
+      [k2],
+    );
+    await h.c.onMessage({ type: 'undo', file });
+
+    // Show a text file, Keep it, move it: each one step.
+    await h.c.onMessage({ type: 'showFiles', names: ['in'], show: true });
+    await h.c.onMessage({ type: 'keep', key: 'f:in' });
+    s = await h.state();
+    const kept = s.cases.find((c) => c.input.text === '5\n' && c.origin === 'manual')!;
+    assert.ok(kept);
+    const order = s.cases.map((c) => c.key);
+    await h.c.onMessage({ type: 'reorder', keys: [...order].reverse() });
+    await h.c.onMessage({ type: 'undo', file });
+    s = await h.state();
+    assert.deepEqual(
+      s.cases.map((c) => c.key),
+      order,
+    );
+    await h.c.onMessage({ type: 'undo', file });
+    s = await h.state();
+    assert.ok(!s.cases.some((c) => c.key === kept.key), 'Keep undone');
+    await h.c.onMessage({ type: 'undo', file });
+    s = await h.state();
+    assert.equal(s.fileCases[0].shown, false, 'show undone');
+
+    // A run sent right after typing (Ctrl+Enter) sees the new text.
+    s = await h.state();
+    const fresh = s.cases.find((c) => c.origin === 'manual')!.key;
+    const typing = h.c.onMessage({ type: 'edit', key: fresh, field: 'in', text: '21\n', file });
+    await h.c.onMessage({ type: 'runCase', key: fresh });
+    await typing;
+    s = await h.waitFor((x) => ['AC', 'WA', 'RAN'].includes(x.cases.find((c) => c.key === fresh)?.result?.verdict ?? ''));
+    assert.equal(s.cases.find((c) => c.key === fresh)!.result!.received?.text, '42\n');
+
+    // Runs re-read Expected without giving unchanged text a new rev (a box being typed in is never replaced).
+    const e1 = s.cases.find((c) => c.key === fresh)!.expected!;
+    await h.c.onMessage({ type: 'edit', key: fresh, field: 'ans', text: '42\n', file, seq: 77 });
+    s = await h.state();
+    const typedAns = s.cases.find((c) => c.key === fresh)!.expected!;
+    assert.equal(typedAns.echo, true);
+    assert.equal(typedAns.seq, 77);
+    assert.notEqual(typedAns.rev, e1.rev);
+    await h.c.onMessage({ type: 'runCase', key: fresh });
+    s = await h.waitFor((x) => x.cases.find((c) => c.key === fresh)?.result?.verdict === 'AC');
+    assert.equal(s.cases.find((c) => c.key === fresh)!.expected!.rev, typedAns.rev, 'same rev after the run');
+
+    // Text changed in an editor meanwhile: undo doesn't overwrite it.
+    const freshId = fresh.slice(2);
+    await fsp.writeFile(path.join(caseDir, `${freshId}.ans`), 'edited elsewhere\n');
+    h.posts.length = 0;
+    await h.c.onMessage({ type: 'undo', file });
+    assert.ok(h.posts.some((m) => m.type === 'notice' && /changed outside the sidebar/.test(m.text)));
+    assert.equal(await fsp.readFile(path.join(caseDir, `${freshId}.ans`), 'utf8'), 'edited elsewhere\n');
+
+    // A notice's Undo only undoes its own step.
+    await h.c.onMessage({ type: 'deleteCase', key: fresh });
+    const del = h.posts.filter((m) => m.type === 'notice' && m.text.startsWith('Deleted')).pop() as { id?: number };
+    await h.c.onMessage({ type: 'addCase' });
+    h.posts.length = 0;
+    await h.c.onMessage({ type: 'undo', file, id: del.id });
+    assert.ok(h.posts.some((m) => m.type === 'notice' && /newer changes/.test(m.text)));
+    await h.c.onMessage({ type: 'undo', file });
+    h.posts.length = 0;
+    await h.c.onMessage({ type: 'undo', file, id: del.id });
+    s = await h.state();
+    assert.ok(s.cases.some((c) => c.key === fresh), 'its own step: undone');
+
+    // Files gone (another window emptied the trash): undo refuses instead of making empty cases.
+    await h.c.onMessage({ type: 'deleteCase', key: fresh });
+    await fsp.rm(path.join(caseDir, '.trash'), { recursive: true, force: true });
+    h.posts.length = 0;
+    await h.c.onMessage({ type: 'undo', file });
+    assert.ok(h.posts.some((m) => m.type === 'notice' && /are gone/.test(m.text)));
+    assert.ok(!(await h.state()).cases.some((c) => c.key === fresh));
+
+    // A new step clears redo.
+    await h.c.onMessage({ type: 'addCase' });
+    h.posts.length = 0;
+    await h.c.onMessage({ type: 'redo', file });
+    assert.ok(h.posts.some((m) => m.type === 'notice' && m.text === 'Nothing to redo'));
+    h.c.dispose();
+    h.integ.dispose();
+  });
+});
+
+describe('gen case', () => {
+  it('adds generated cases, fills the expected output from an answer program, and reports gen failures', async () => {
+    const root = await mkws({
+      'g/a.cpp': DOUBLE,
+      'g/gen.py': 'import sys, random\nrandom.seed(int(sys.argv[1]))\nprint(random.randint(1, 1000))\n',
+      'g/slow.py': 'print(int(input()) * 2)\n',
+    });
+    const h = harness(root);
+    const file = path.join(root, 'g/a.cpp');
+    await h.c.setActive(file);
+    let s = await h.state();
+    assert.equal(s.stress.gen.canRun, true);
+    assert.equal(s.stress.gen.genName, 'gen.py');
+    assert.deepEqual(
+      s.stress.gen.slots.map((x) => [x.role, x.value]),
+      [
+        ['gen', 'gen.py'],
+        ['answer', ''],
+      ],
+    );
+    await h.c.onMessage({ type: 'genCase' });
+    s = await h.state();
+    assert.equal(s.cases.length, 1);
+    const n = Number(s.cases[0].input.text);
+    assert.ok(n >= 1 && n <= 1000, `generated ${s.cases[0].input.text}`);
+    assert.equal(s.cases[0].expected?.text, '');
+    assert.equal(s.stress.gen.status?.state, 'clean');
+    assert.match(s.stress.gen.status?.text ?? '', /^added Case 1 · \d+ B$/);
+    await sleep(150);
+    assert.ok(h.posts.some((m) => m.type === 'reveal' && m.key === s.cases[0].key));
+
+    await h.c.stress.onMessage(file, { type: 'stressPick', mode: 'gen', role: 'answer', value: 'slow.py' });
+    await h.c.onMessage({ type: 'genCase' });
+    s = await h.state();
+    const c2 = s.cases[1];
+    assert.equal(Number(c2.expected?.text), Number(c2.input.text) * 2, 'expected output from the answer program');
+
+    await h.c.onMessage({ type: 'undo', file });
+    assert.equal((await h.state()).cases.length, 1, 'gen case is undoable');
+
+    await fsp.writeFile(path.join(root, 'g/gen.py'), 'import sys\nprint("boom", file=sys.stderr)\nsys.exit(3)\n');
+    await h.c.onMessage({ type: 'genCase' });
+    s = await h.state();
+    assert.equal(s.stress.gen.status?.state, 'error');
+    assert.match(s.stress.gen.status?.text ?? '', /gen\.py failed/);
+    assert.match(s.stress.gen.status?.detail ?? '', /boom/);
+    assert.equal(s.stress.gen.open, true, 'the section opens to show the error');
+    assert.equal(s.cases.length, 1);
+    h.c.dispose();
+    h.integ.dispose();
+  });
+
+  it('with gen.cpp or the brute open, cases go to the solution; interactive problems get no answer program', async () => {
+    const root = await mkws({ 'y/y.cpp': DOUBLE, 'y/gen.py': 'print(7)\n', 'y/ybrute.py': 'print(int(input()) * 2)\n' });
+    const h = harness(root);
+    const sol = path.join(root, 'y/y.cpp');
+    const gen = path.join(root, 'y/gen.py');
+    await h.c.setActive(gen);
+    let s = await h.state();
+    assert.equal(s.stress.gen.targetName, 'y.cpp');
+    await h.c.stress.onMessage(gen, { type: 'stressPick', mode: 'gen', role: 'answer', value: 'ybrute.py' });
+    await h.c.onMessage({ type: 'genCase' });
+    s = await h.state();
+    assert.equal(s.cases.length, 0, 'nothing added to gen.py itself');
+    assert.match(s.stress.gen.status?.text ?? '', /^added Case 1 to y\.cpp/);
+    assert.ok(h.posts.some((m) => m.type === 'notice' && /Added Case 1 to y\.cpp/.test(m.text)));
+    await h.c.setActive(sol);
+    s = await h.state();
+    assert.equal(s.cases[0].input.text, '7\n');
+    assert.equal(s.cases[0].expected?.text, '14\n');
+    await h.c.onMessage({ type: 'setting', patch: { interactive: true, judge: 'judge.py' } });
+    s = await h.state();
+    assert.deepEqual(
+      s.stress.gen.slots.map((x) => x.role),
+      ['gen'],
+      'no answer slot for interactive problems',
+    );
+    await h.c.onMessage({ type: 'genCase' });
+    s = await h.state();
+    assert.equal(s.cases.length, 2);
+    assert.equal(s.stress.gen.status?.state, 'clean', s.stress.gen.status?.text);
+    h.c.dispose();
+    h.integ.dispose();
+  });
+
+  it('Set up moves the file into its own folder and creates only gen.cpp', async () => {
+    const root = await mkws({ 'cf/z.cpp': DOUBLE });
+    const h = harness(root);
+    const file = path.join(root, 'cf/z.cpp');
+    await h.c.setActive(file);
+    await h.c.onMessage({ type: 'addCase' });
+    let s = await h.state();
+    const key = s.cases[0].key;
+    assert.equal(s.stress.gen.needsSetup, true);
+    assert.equal(s.stress.gen.canRun, false);
+    await h.c.stress.onMessage(file, { type: 'stressSetup', mode: 'gen' });
+    assert.ok(fs.existsSync(path.join(root, 'cf/z/z.cpp')));
+    // The sidebar may still send the old path (typing flushed when the view switched): it lands on the moved file.
+    await h.c.onMessage({ type: 'edit', key, field: 'in', text: 'after move\n', file });
+    s = await h.state();
+    assert.equal(s.cases.find((c) => c.key === key)?.input.text, 'after move\n');
+    assert.ok(!fs.existsSync(path.join(root, '.cp2/cases/cf/z.cpp')), 'no problem data left at the old path');
+    assert.ok(fs.existsSync(path.join(root, 'cf/z/gen.cpp')));
+    assert.ok(!fs.existsSync(path.join(root, 'cf/z/zbrute.cpp')), 'no brute for generate');
+    s = await h.state();
+    assert.equal(s.stress.gen.canRun, true);
+    assert.equal(s.stress.gen.open, true);
+    await h.c.onMessage({ type: 'genCase' });
+    s = await h.state();
+    assert.equal(s.cases.length, 2, s.stress.gen.status?.text + ' ' + (s.stress.gen.status?.detail ?? ''));
+    h.c.dispose();
+    h.integ.dispose();
+  });
+});
+
 describe('interactive', () => {
   it('runs against a judge and records the conversation', async () => {
     const root = await mkws({
@@ -190,6 +469,7 @@ describe('interactive', () => {
     const h = harness(root);
     const file = path.join(root, 'q/sol.py');
     await h.c.setActive(file);
+    await h.c.onMessage({ type: 'showFiles', names: ['in'], show: true });
     await h.c.onMessage({ type: 'setting', patch: { interactive: true, judge: 'judge.py' } });
     let s = await h.state();
     assert.equal(s.manual.visible, true);
@@ -325,9 +605,15 @@ describe('integrations', () => {
     await h.c.setActive(z);
     let s = await h.state();
     assert.match(s.importBtn.label, /^Import · 2261 A/);
+    await h.c.onMessage({ type: 'addCase' });
     await h.integ.doImport(z);
     s = await h.state();
     assert.equal(s.cases.filter((c) => c.origin === 'imported').length, 2);
+    // An import isn't an undo step (it relinks the file) and older steps can't be applied over it.
+    h.posts.length = 0;
+    await h.c.onMessage({ type: 'undo', file: z });
+    assert.ok(h.posts.some((m) => m.type === 'notice' && m.text === 'Nothing to undo'));
+    assert.equal((await h.state()).cases.filter((c) => c.origin === 'imported').length, 2);
     assert.equal(s.problem?.timeLimitMs, 2000);
     assert.equal(s.submitBtn.enabled, true);
     assert.match(fake.statusBar['cp2.problem'] ?? '', /2261 A/);
@@ -451,6 +737,7 @@ describe('large cases', () => {
     const h = harness(root);
     fake.config['cp2.cpp.flags'] = '-O2';
     await h.c.setActive(path.join(root, 'big/s.cpp'));
+    await h.c.onMessage({ type: 'showFiles', names: ['in'], show: true });
     const t0 = Date.now();
     await h.c.runAll();
     const s = await h.waitFor((x) => !x.running && x.cases[0]?.result?.verdict === 'AC', 30000);

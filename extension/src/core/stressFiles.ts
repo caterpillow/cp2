@@ -22,7 +22,8 @@ export function isGenName(n: string): boolean {
   return GEN.test(n);
 }
 
-function plain(n: string): boolean {
+/** Not a gen, brute, checker, judge, …: a name a solution would have. */
+export function plain(n: string): boolean {
   return !GEN.test(n) && !BRUTE.test(n) && !HELPER.test(n);
 }
 

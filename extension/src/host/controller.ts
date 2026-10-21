@@ -10,9 +10,10 @@ import { atomicWrite, exists, readText, sha1, statOrNull } from '../core/fsutil'
 import { ManualSession, runChecker, runInteractive } from '../core/interactive';
 import { isCompileWithCandidate, isSourceFile, langOf } from '../core/lang';
 import { classifyRun, describeExit, runProcess } from '../core/runner';
-import { displayOrder, fileKey, isFileKey, isStoredKey, keyId, Problem, ProblemSettings, Store, StoreIndex, StoreLocator, storedKey } from '../core/store';
+import { caseLabel, displayOrder, fileKey, isStoredKey, keyId, Problem, ProblemSettings, Store, StoreIndex, StoreLocator, storedKey } from '../core/store';
 import type { CaseVM, FromWebview, ResultVM, ToWebview, TranscriptLine, ViewState } from '../../../shared/viewModel';
 import { DirIndex, DirListing } from './dirIndex';
+import { diffListState, HistoryEntry } from './history';
 import { CaseResult, Session } from './session';
 import { legacySaveLocation, readConfig } from './settings';
 import type { StressHost } from './stressHost';
@@ -50,6 +51,10 @@ export class Controller implements vscode.Disposable {
   private renderAgain = false;
   private config: Cp2Config | null = null;
   private disposables: vscode.Disposable[] = [];
+  /** Changes to cases run one at a time, in the order the sidebar sent them (an edit flushed right before Ctrl+Z). */
+  private mutations: Promise<unknown> = Promise.resolve();
+  /** Old path -> new path of source files moved in this session. */
+  private movedTo = new Map<string, string>();
   poster: Poster | null = null;
   stress!: StressHost;
   extras: Extras | null = null;
@@ -187,6 +192,8 @@ export class Controller implements vscode.Disposable {
     const s = await this.getSession(file);
     if (changed) s.resetSent();
     if (editor && s.problem.meta.snippetCursor) this.applySnippetCursor(s.problem, editor);
+    // Not awaited: setActive also runs inside queued steps (Set up), and this queues a step of its own.
+    if (changed) void this.stress.opened(file);
     this.requestRender(0);
   }
 
@@ -265,6 +272,8 @@ export class Controller implements vscode.Disposable {
       this.sessions.delete(oldPath);
       this.sessions.set(newPath, s);
     }
+    this.movedTo.set(oldPath, newPath);
+    this.movedTo.delete(newPath);
     if (oldStore === newStore) (await this.indexFor(oldStore)).renameFile(oldRel, newStore.rel(newPath));
     if (this.active === oldPath) this.active = newPath;
     this.extras?.onVerdictChanged?.(newPath);
@@ -298,6 +307,35 @@ export class Controller implements vscode.Disposable {
 
   // ---------------- rendering ----------------
 
+  /** Waits for queued case changes (typing sent just before a run). */
+  settled(): Promise<void> {
+    return this.mutations.then(() => undefined);
+  }
+
+  serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.mutations.then(fn, fn);
+    this.mutations = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Runs a change to a file's case list as one undo step. Call it inside serial(). */
+  async recordList<T>(file: string, label: string, fn: (p: Problem) => T | Promise<T>): Promise<{ value: T; entry: HistoryEntry | null }> {
+    const s = await this.getSession(file);
+    const before = s.problem.listState();
+    const value = await fn(s.problem);
+    const e = diffListState(label, before, s.problem.listState());
+    return { value, entry: e ? s.history.push(e) : null };
+  }
+
+  /** A change made outside the history (import): older steps can't be applied over it any more. */
+  forgetHistory(file: string): void {
+    this.sessions.get(file)?.history.clear();
+  }
+
+  notice(text: string, action?: 'undo' | 'redo', id?: number): void {
+    this.poster?.post({ type: 'notice', text, action, id });
+  }
+
   requestRender(delay = 25): void {
     if (this.renderTimer) return;
     this.renderTimer = setTimeout(() => {
@@ -328,7 +366,10 @@ export class Controller implements vscode.Disposable {
   }
 
   webviewReady(): void {
-    for (const s of this.sessions.values()) s.resetSent();
+    for (const s of this.sessions.values()) {
+      s.resetSent();
+      s.resetSeqs();
+    }
     const s = this.active ? this.sessions.get(this.active) : undefined;
     if (s) this.poster?.post({ type: 'manual', events: s.manualEvents, reset: true });
     this.requestRender(0);
@@ -336,6 +377,7 @@ export class Controller implements vscode.Disposable {
 
   private emptyState(): ViewState {
     const sec = { open: false, slots: [], shrink: 0, canRun: false, needsSetup: false, running: false };
+    const gen = { open: false, slots: [], canRun: false, needsSetup: false, running: false };
     return {
       file: null,
       problem: null,
@@ -344,7 +386,8 @@ export class Controller implements vscode.Disposable {
       running: false,
       importBtn: { label: 'Import', title: '', enabled: false },
       submitBtn: { label: 'Submit', title: '', enabled: false },
-      stress: { wa: sec, re: sec },
+      stress: { gen, wa: sec, re: sec },
+      fileCases: [],
       manual: { visible: false, running: false },
       ui: { settingsOpen: this.settingsOpen },
       warnings: [],
@@ -362,10 +405,10 @@ export class Controller implements vscode.Disposable {
     const listing = await this.dirs.get(dir);
     const st = meta.settings;
     const store = p.store;
-    const matches = listing.matches.filter((m) => !meta.hiddenFiles.includes(m.input));
+    const shown = new Set(meta.shownFiles);
+    const matches = listing.matches.filter((m) => shown.has(m.input));
     const order = displayOrder(meta, matches.map((m) => fileKey(m.input)));
-    const manualIds = meta.cases.filter((c) => c.origin === 'manual').map((c) => c.id);
-    const cases = (await Promise.all(order.map((o) => this.caseVM(s, o.key, o.pinned, listing, manualIds)))).filter((c): c is CaseVM => !!c);
+    const cases = (await Promise.all(order.map((o) => this.caseVM(s, o.key, o.pinned, listing)))).filter((c): c is CaseVM => !!c);
     const dirFiles = listing.files.filter(isSourceFile).sort();
     const title = meta.name ?? path.basename(file);
     const warnings: string[] = [];
@@ -394,6 +437,7 @@ export class Controller implements vscode.Disposable {
       importBtn: this.extras?.importButton(p) ?? { label: 'Import', title: 'cp2-bridge not available', enabled: false },
       submitBtn: this.extras?.submitButton(p) ?? { label: 'Submit', title: 'cp2-bridge not available', enabled: false },
       stress: await this.stress.sections(file, listing),
+      fileCases: listing.matches.map((m) => ({ name: m.input, expected: m.expected, shown: shown.has(m.input) })),
       manual: { visible: st.interactive, running: !!s.manual?.running, exit: s.manualExit },
       ui: { settingsOpen: this.settingsOpen },
       warnings,
@@ -416,7 +460,7 @@ export class Controller implements vscode.Disposable {
     return { input: path.join(dir, name), expected: m.expected ? path.join(dir, m.expected) : null, candidate: path.join(dir, m.expectedCandidate) };
   }
 
-  private async caseVM(s: Session, key: string, pinned: boolean, listing: DirListing, manualIds: string[]): Promise<CaseVM | null> {
+  private async caseVM(s: Session, key: string, pinned: boolean, listing: DirListing): Promise<CaseVM | null> {
     const p = s.problem;
     const files = this.caseFiles(s, key, listing);
     if (!files) return null;
@@ -429,7 +473,7 @@ export class Controller implements vscode.Disposable {
     if (isStoredKey(key)) {
       const c = p.findCase(keyId(key))!;
       origin = c.origin;
-      label = c.origin === 'imported' ? `Sample ${c.sample ?? ''}`.trim() : `Case ${manualIds.indexOf(c.id) + 1}`;
+      label = caseLabel(p.meta, c.id);
     } else {
       origin = 'file';
       const name = keyId(key);
@@ -495,6 +539,7 @@ export class Controller implements vscode.Disposable {
   // ---------------- running ----------------
 
   async runAll(file?: string): Promise<void> {
+    await this.settled();
     const f = file ?? this.active;
     if (!f) {
       void vscode.window.showInformationMessage('cp2: open a source file first');
@@ -504,12 +549,13 @@ export class Controller implements vscode.Disposable {
     const s = await this.getSession(f);
     const listing = await this.dirs.get(path.dirname(f));
     const meta = s.problem.meta;
-    const matches = listing.matches.filter((m) => !meta.hiddenFiles.includes(m.input));
+    const matches = listing.matches.filter((m) => meta.shownFiles.includes(m.input));
     const keys = displayOrder(meta, matches.map((m) => fileKey(m.input))).map((o) => o.key);
     await this.runKeys(s, keys);
   }
 
   async runOne(key: string): Promise<void> {
+    await this.settled();
     if (!this.active) return;
     const s = await this.getSession(this.active);
     await this.runKeys(s, [key]);
@@ -699,61 +745,28 @@ export class Controller implements vscode.Disposable {
       case 'stressSetting':
         if (file) await this.stress.onMessage(file, m);
         return;
+      case 'genCase':
+        if (file) await this.stress.genCase(file);
+        return;
     }
     if (!file) return;
-    const target = m.type === 'edit' && m.file ? m.file : file;
-    const s = await this.getSession(target);
-    const p = s.problem;
-    const listing = await this.dirs.get(path.dirname(target));
     switch (m.type) {
-      case 'addCase': {
-        const c = await p.addCase('manual', '', '');
-        this.requestRender(0);
-        setTimeout(() => this.poster?.post({ type: 'reveal', key: storedKey(c.id) }), 80);
-        return;
-      }
+      case 'addCase':
       case 'deleteCase':
-        if (isStoredKey(m.key)) await p.deleteCase(keyId(m.key));
-        else p.hideFile(keyId(m.key));
-        s.results.delete(m.key);
-        return this.requestRender();
       case 'hideCase':
-        if (isFileKey(m.key)) p.hideFile(keyId(m.key));
-        return this.requestRender();
-      case 'edit': {
-        if (!isStoredKey(m.key)) return; // text-file cases are read-only (Keep makes an editable copy)
-        const files = this.caseFiles(s, m.key, listing);
-        if (!files) return;
-        const target = m.field === 'in' ? files.input : files.expected;
-        if (!target) return;
-        this.dirs.noteOwnWrite(target);
-        await atomicWrite(target, m.text);
-        s.setTextFromWebview(`${m.key}|${m.field}`, m.text, target);
-        p.scheduleSave();
-        const r = s.results.get(m.key);
-        if (r?.outFile && m.field === 'ans' && !r.transcript && ['AC', 'WA', 'RAN'].includes(r.verdict)) {
-          const j = await this.judgeOutput(s, { input: files.input, expected: target }, r.outFile, null, r.stderr ?? '');
-          s.results.set(m.key, { ...r, ...j, diff: j.diff });
-          s.invalidateText(`${m.key}|out`);
-        }
-        return this.requestRender();
-      }
+      case 'showFiles':
+      case 'edit':
       case 'pin':
-        p.setPinned(m.key, m.pinned);
-        return this.requestRender(0);
       case 'reorder':
-        p.reorder(m.keys);
-        return this.requestRender(0);
-      case 'keep': {
-        const files = this.caseFiles(s, m.key, listing);
-        if (!files) return;
-        const input = (await readText(files.input)) ?? '';
-        const exp = files.expected ? ((await readText(files.expected)) ?? '') : '';
-        const c = await p.addManualAfter(input, exp, m.key);
-        this.requestRender(0);
-        setTimeout(() => this.poster?.post({ type: 'reveal', key: storedKey(c.id) }), 80);
-        return;
-      }
+      case 'keep':
+      case 'undo':
+      case 'redo':
+        return this.serial(() => this.mutate(m, file));
+    }
+    const s = await this.getSession(file);
+    const p = s.problem;
+    const listing = await this.dirs.get(path.dirname(file));
+    switch (m.type) {
       case 'open': {
         const files = this.caseFiles(s, m.key, listing);
         const r = s.results.get(m.key) ?? this.resultFor(s, m.key);
@@ -807,6 +820,149 @@ export class Controller implements vscode.Disposable {
         return;
       }
     }
+  }
+
+  /** Where a file is now, following moves (Set up, renames) the webview may not know about yet. */
+  private currentPath(file: string): string {
+    for (let i = 0; i < 10 && this.movedTo.has(file); i++) file = this.movedTo.get(file)!;
+    return file;
+  }
+
+  /** Changes to a file's cases; every one is an undo step. Runs inside serial(). */
+  private async mutate(m: FromWebview, active: string): Promise<void> {
+    const target = this.currentPath((m.type === 'edit' || m.type === 'undo' || m.type === 'redo') && m.file ? m.file : active);
+    if (target !== active && !(await exists(target))) return; // a file that's gone: don't conjure up an empty problem
+    const s = await this.getSession(target);
+    const p = s.problem;
+    const listing = await this.dirs.get(path.dirname(target));
+    const label = (key: string) => (isStoredKey(key) ? caseLabel(p.meta, keyId(key)) : keyId(key));
+    switch (m.type) {
+      case 'addCase': {
+        const { value: c } = await this.recordList(target, 'adding a case', (p) => p.addCase('manual', '', ''));
+        this.requestRender(0);
+        this.reveal(storedKey(c.id), { focus: true });
+        return;
+      }
+      case 'deleteCase':
+      case 'hideCase': {
+        const name = label(m.key);
+        let entry: HistoryEntry | null;
+        if (isStoredKey(m.key)) {
+          if (m.type === 'hideCase' || !p.findCase(keyId(m.key))) return;
+          ({ entry } = await this.recordList(target, `deleting ${name}`, (p) => p.deleteCase(keyId(m.key))));
+          this.notice(`Deleted ${name}`, 'undo', entry?.id);
+        } else {
+          if (!p.meta.shownFiles.includes(name)) return;
+          ({ entry } = await this.recordList(target, `hiding ${name}`, (p) => p.showFile(name, false)));
+          this.notice(`Hid ${name} · Files shows it again`, 'undo', entry?.id);
+        }
+        s.results.delete(m.key);
+        return this.requestRender(0);
+      }
+      case 'showFiles': {
+        const names = m.names.filter((n) => listing.matches.some((x) => x.input === n) || !m.show);
+        if (!names.length) return;
+        await this.recordList(target, `${m.show ? 'showing' : 'hiding'} ${names.length === 1 ? names[0] : `${names.length} files`}`, (p) => {
+          for (const n of names) p.showFile(n, m.show);
+        });
+        if (!m.show) for (const n of names) s.results.delete(fileKey(n));
+        return this.requestRender(0);
+      }
+      case 'edit': {
+        if (!isStoredKey(m.key)) return; // text-file cases are read-only (Keep makes an editable copy)
+        const files = this.caseFiles(s, m.key, listing);
+        if (!files) return;
+        const file = m.field === 'in' ? files.input : files.expected;
+        if (!file) return;
+        const id = `${m.key}|${m.field}`;
+        const before = (await readText(file)) ?? '';
+        if (before === m.text) {
+          s.noteSeq(id, m.seq);
+          return;
+        }
+        await atomicWrite(file, m.text);
+        s.setTextFromWebview(id, m.text, file, m.seq);
+        s.history.pushText({ kind: 'text', label: `typing in ${label(m.key)}`, caseId: keyId(m.key), field: m.field, before, after: m.text, at: Date.now() });
+        p.scheduleSave();
+        if (m.field === 'ans') await this.rejudgeOne(s, m.key, listing);
+        return this.requestRender();
+      }
+      case 'pin':
+        await this.recordList(target, `${m.pinned ? 'pinning' : 'unpinning'} ${label(m.key)}`, (p) => p.setPinned(m.key, m.pinned));
+        return this.requestRender(0);
+      case 'reorder':
+        await this.recordList(target, 'moving a case', (p) => p.reorder(m.keys));
+        return this.requestRender(0);
+      case 'keep': {
+        const files = this.caseFiles(s, m.key, listing);
+        if (!files) return;
+        // Copied file to file: text files can be big.
+        const { value: c } = await this.recordList(target, `keeping ${label(m.key)}`, (p) => p.addCaseFromFiles(files.input, files.expected, m.key));
+        this.requestRender(0);
+        this.reveal(storedKey(c.id), { focus: true });
+        return;
+      }
+      case 'undo':
+      case 'redo':
+        return this.undoRedo(s, m.type, listing, m.id);
+    }
+  }
+
+  /** Scroll a case into view once the state that contains it has arrived. */
+  reveal(key: string, opts: { focus?: boolean; expand?: boolean } = {}): void {
+    setTimeout(() => this.poster?.post({ type: 'reveal', key, ...opts }), 80);
+  }
+
+  private async undoRedo(s: Session, dir: 'undo' | 'redo', listing: DirListing, id?: number): Promise<void> {
+    const top = s.history.peek(dir);
+    if (!top) return this.notice(`Nothing to ${dir}`);
+    // A notice's Undo / Redo button: only the step it describes.
+    if (id !== undefined && top.id !== id) return this.notice(`There are newer changes: use ${dir === 'undo' ? 'Ctrl+Z' : 'Ctrl+R'} to step through them`);
+    const e = s.history.take(dir)!;
+    const p = s.problem;
+    let reveal: string | undefined;
+    try {
+      if (e.kind === 'text') {
+        const key = storedKey(e.caseId);
+        if (!p.findCase(e.caseId)) return this.notice(`Can't ${dir} ${e.label}: that case is gone`);
+        // Changed in an editor meanwhile ("open in editor"): don't overwrite that.
+        if ((await p.readCaseText(e.caseId, e.field)) !== (dir === 'undo' ? e.after : e.before)) return this.notice(`Can't ${dir} ${e.label}: it was changed outside the sidebar`);
+        await p.writeCaseText(e.caseId, e.field, dir === 'undo' ? e.before : e.after);
+        s.invalidateText(`${key}|${e.field}`);
+        if (e.field === 'ans') await this.rejudgeOne(s, key, listing);
+        reveal = key;
+      } else {
+        const st = dir === 'undo' ? e.before : e.after;
+        const lost = st.cases ? await p.lostCases(st.cases) : [];
+        if (lost.length) return this.notice(`Can't ${dir} ${e.label}: the files of ${caseLabel({ ...p.meta, cases: st.cases! }, lost[0].id)} are gone`);
+        const visible = () => [...p.meta.cases.map((c) => storedKey(c.id)), ...p.meta.shownFiles.map(fileKey)];
+        const had = new Set(visible());
+        await p.applyListState(st, dir === 'undo' ? { add: e.shown.removed, remove: e.shown.added } : { add: e.shown.added, remove: e.shown.removed });
+        const now = visible();
+        for (const k of [...s.results.keys()]) if (!now.includes(k)) s.results.delete(k);
+        for (const k of [...had].filter((k) => !now.includes(k)).concat(now.filter((k) => !had.has(k)))) if (isStoredKey(k)) s.invalidatePrefix(`${k}|`);
+        reveal = now.find((k) => !had.has(k));
+      }
+    } catch (err) {
+      s.history.restore(dir, e);
+      this.log(`${dir} failed: ${(err as Error).stack ?? err}`);
+      return this.notice(`Couldn't ${dir} ${e.label}: ${(err as Error).message ?? err}`);
+    }
+    s.history.applied(dir, e);
+    this.requestRender(0);
+    if (reveal) this.reveal(reveal, { expand: true });
+    this.notice(`${dir === 'undo' ? 'Undid' : 'Redid'} ${e.label}`, dir === 'undo' ? 'redo' : 'undo', e.id);
+  }
+
+  /** Re-judge a case's existing output after its expected output changed. */
+  private async rejudgeOne(s: Session, key: string, listing: DirListing): Promise<void> {
+    const r = s.results.get(key);
+    if (!r?.outFile || r.transcript || !['AC', 'WA', 'RAN'].includes(r.verdict)) return;
+    const files = this.caseFiles(s, key, listing);
+    if (!files) return;
+    const j = await this.judgeOutput(s, files, r.outFile, null, r.stderr ?? '');
+    s.results.set(key, { ...r, ...j, diff: j.diff });
+    s.invalidateText(`${key}|out`);
   }
 
   private async manualStart(s: Session): Promise<void> {
