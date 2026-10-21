@@ -3,7 +3,7 @@
   "displayName": "cp2 — Competitive Programming Helper 2",
   "description": "Test cases without the clicking: implicit problems, text-file cases, stress testing, one-key sample import and submit for Codeforces / AtCoder. Reads your existing .cph data.",
   "publisher": "caterpillow",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "license": "MIT",
   "engines": {
     "vscode": "^1.95.0"

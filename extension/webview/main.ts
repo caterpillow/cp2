@@ -120,6 +120,7 @@ class Field {
   box: TextBox | null = null;
   private pending: ReturnType<typeof debounce> | null = null;
   private lastText = '';
+  private btnsWrap: boolean | null = null;
 
   readonly kind: string;
 
@@ -175,6 +176,8 @@ class Field {
 
   private renderButtons(): void {
     const on = wrapOn(this.kind);
+    if (this.btnsWrap === on && !this.opts.extraButtons) return;
+    this.btnsWrap = on;
     this.btns.replaceChildren(
       ...(this.opts.extraButtons?.() ?? []),
       btn(null, 'word-wrap', () => this.toggleWrap(), { title: on ? 'Line wrap is on (for every box of this kind)' : 'Line wrap is off (for every box of this kind)', cls: `tiny ${on ? 'active' : ''}` }),
@@ -275,6 +278,7 @@ class Card {
   /** File the card last showed (cards are reused across files) and the time of its last result. */
   private file = '';
   private lastAt?: number;
+  private actionsSig = '';
 
   constructor(readonly key: string) {
     const grip = h('span', { class: 'grip', title: 'Drag to reorder' }, icon('gripper'));
@@ -339,7 +343,7 @@ class Card {
 
   /** Like CPH: a finished run folds up passing cases and opens failing ones. */
   private autoCollapse(r: ResultVM | undefined, sameFile: boolean): void {
-    const fresh = sameFile && !!r && r.at !== this.lastAt;
+    const fresh = sameFile && !!r && !r.live && r.at !== this.lastAt;
     this.lastAt = r?.at;
     if (!fresh) return;
     const o = OUTCOME[r!.verdict];
@@ -383,7 +387,11 @@ class Card {
       this.badge.textContent = '';
       this.time.textContent = '';
     }
-    this.actions.replaceChildren(
+    // Only rebuilt when they change: swapping a button between mousedown and mouseup loses the click.
+    const actionsSig = JSON.stringify([vm.origin, vm.pinned, !!(r?.diffExpected && r.received)]);
+    if (actionsSig !== this.actionsSig) {
+      this.actionsSig = actionsSig;
+      this.actions.replaceChildren(
       ...[
         vm.origin === 'file' ? btn('Keep', 'save', () => send({ type: 'keep', key: k }), { title: 'Text-file cases are read-only. Keep copies this one into an editable case.', cls: 'tiny text keep' }) : null,
         r?.diffExpected && r.received ? btn(null, 'diff', () => send({ type: 'diff', key: k }), { title: 'Open expected vs received in a diff editor', cls: 'tiny' }) : null,
@@ -393,7 +401,8 @@ class Card {
           ? btn(null, 'eye-closed', () => send({ type: 'hideCase', key: k }), { title: 'Hide this file case for this file', cls: 'tiny' })
           : btn(null, 'trash', () => send({ type: 'deleteCase', key: k }), { title: 'Delete case', cls: 'tiny' }),
       ].filter((x): x is HTMLButtonElement => !!x),
-    );
+      );
+    }
 
     // input / expected
     this.input.update(vm.input);
@@ -566,7 +575,12 @@ function renderCases(s: ViewState): void {
 
 // ---------------- header ----------------
 
+let headerSig = '';
 function renderHeader(s: ViewState): void {
+  // Runs re-render often; rebuilding the header each time would eat clicks on Stop.
+  const sig = JSON.stringify([s.file, s.problem && { ...s.problem, dirFiles: 0, compileCandidates: 0 }, s.running, s.importBtn, s.submitBtn, s.ui.settingsOpen]);
+  if (sig === headerSig) return;
+  headerSig = sig;
   if (!s.file || !s.problem) {
     hdr.replaceChildren(h('div', { class: 'title-row' }, h('span', { class: 'muted' }, 'cp2')));
     return;
@@ -823,6 +837,9 @@ for (const mode of ['wa', 're'] as const) {
   });
 }
 let shrinkDragging = false;
+/** Structure each section was last built for, and the texts that change in place while it runs. */
+const stressSig: Record<'wa' | 're', string> = { wa: '', re: '' };
+const stressLive: Record<'wa' | 're', { chip: HTMLElement | null; status: HTMLElement | null }> = { wa: { chip: null, status: null }, re: { chip: null, status: null } };
 
 function renderStress(s: ViewState): void {
   footer.hidden = !s.file;
@@ -830,6 +847,19 @@ function renderStress(s: ViewState): void {
     const sec = s.stress[mode];
     const el = stressEls[mode];
     if (el.open !== sec.open) el.open = sec.open;
+    // A run reports progress several times a second. Rebuilding then would swap Stop out from under
+    // the mouse (the click never lands) and close open dropdowns, so only the status texts change.
+    const sig = JSON.stringify({ ...sec, open: 0, status: sec.status && { ...sec.status, text: 0 } });
+    if (sig === stressSig[mode]) {
+      const live = stressLive[mode];
+      if (sec.status && live.chip) live.chip.textContent = shortStatus(sec);
+      if (sec.status && live.status) live.status.textContent = sec.status.text;
+      continue;
+    }
+    if (shrinkDragging && el.contains(document.activeElement)) continue;
+    stressSig[mode] = sig;
+    const chipText = sec.status ? h('span', {}, shortStatus(sec)) : null;
+    let statusEl: HTMLElement | null = null;
     const runBtn = sec.running
       ? btn(null, 'debug-stop', () => send({ type: 'stressStop', mode }), { title: 'Stop', cls: 'tiny danger' })
       : btn(null, 'play', () => send({ type: 'stressRun', mode }), { title: sec.canRun ? 'Run' : (sec.disabled ?? sec.reason ?? ''), cls: 'tiny', disabled: !sec.canRun });
@@ -838,7 +868,7 @@ function renderStress(s: ViewState): void {
       {},
       icon('chevron-right'),
       h('span', { class: 'sec-title' }, mode === 'wa' ? 'Run WA stress' : 'Run RE stress'),
-      sec.status ? h('span', { class: `chip st-${sec.status.state}` }, sec.status.state === 'running' || sec.status.state === 'compiling' || sec.status.state === 'shrinking' ? icon('loading codicon-modifier-spin') : '', ' ', shortStatus(sec)) : !sec.canRun && !sec.disabled ? h('span', { class: 'chip st-missing' }, 'not linked') : '',
+      sec.status ? h('span', { class: `chip st-${sec.status.state}` }, sec.status.state === 'running' || sec.status.state === 'compiling' || sec.status.state === 'shrinking' ? icon('loading codicon-modifier-spin') : '', ' ', chipText!) : !sec.canRun && !sec.disabled ? h('span', { class: 'chip st-missing' }, 'not linked') : '',
       runBtn,
     );
     const body = h('div', { class: 'sec-body' });
@@ -866,12 +896,13 @@ function renderStress(s: ViewState): void {
       );
       body.append(actions);
       if (sec.status) {
-        body.append(h('div', { class: `stress-status st-${sec.status.state}` }, sec.status.text));
+        statusEl = h('div', { class: `stress-status st-${sec.status.state}` }, sec.status.text);
+        body.append(statusEl);
         if (sec.status.detail) body.append(h('pre', { class: 'stress-detail' }, sec.status.detail));
       }
     }
-    if (shrinkDragging && el.contains(document.activeElement)) continue;
     el.replaceChildren(summary, body);
+    stressLive[mode] = { chip: chipText, status: statusEl };
   }
 }
 

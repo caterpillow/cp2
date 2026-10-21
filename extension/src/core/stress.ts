@@ -72,6 +72,15 @@ export interface StressStatus {
   shrinkLeftMs?: number;
 }
 
+/** The passing test currently shown in the stress folder: sus's output and stderr on it. */
+export interface StressLive {
+  iteration: number;
+  /** Copy of sus's output (absent for interactive runs). */
+  outputFile?: string;
+  stderr: string;
+  timeMs: number;
+}
+
 interface Pending {
   verdict: StressFailure['verdict'];
   stderr: string;
@@ -124,7 +133,7 @@ export class StressRun extends EventEmitter {
   async start(): Promise<StressStatus> {
     this.t0 = performance.now();
     await fsp.rm(this.cfg.scratch, { recursive: true, force: true }).catch(() => undefined);
-    await mkdirp(this.cfg.scratch);
+    await mkdirp(path.join(this.cfg.scratch, 'live'));
     const ticker = setInterval(() => this.emit('status', this.status()), 200);
     const workers = Array.from({ length: Math.max(1, this.cfg.workers) }, (_, k) => this.worker(k));
     await Promise.all(workers);
@@ -164,6 +173,7 @@ export class StressRun extends EventEmitter {
         break;
       }
       let failure: Pending | null = null;
+      let shown: Omit<StressLive, 'iteration'> = { stderr: '', timeMs: 0 };
       if (c.mode === 'wa') {
         const b = await runProcess({ cmd: c.brute!.cmd, cwd: c.brute!.cwd, stdin: { file: inF }, stdoutFile: ansF, timeLimitMs: c.helperTimeoutMs, limits: c.limits, maxStderr: 16384 }, signal);
         if (signal.aborted) break;
@@ -175,6 +185,7 @@ export class StressRun extends EventEmitter {
         if (signal.aborted) break;
         const v = classifyRun(s);
         if (v === 'STOPPED') break;
+        shown = { outputFile: outF, stderr: s.stderr, timeMs: s.timeMs };
         if (v !== 'OK') {
           failure = { verdict: v === 'ERR' ? 'RE' : v, stderr: s.stderr, message: describeExit(s), timeMs: s.timeMs };
         } else if (c.compare === 'checker' && c.checker) {
@@ -196,6 +207,7 @@ export class StressRun extends EventEmitter {
           await this.error(r.message, '', inF);
           break;
         }
+        shown = { stderr: r.events.filter((e) => e.kind === 'err').map((e) => e.text).join('\n'), timeMs: r.timeMs };
         if (r.verdict !== 'AC') {
           await fsp.writeFile(outF, r.events.filter((e) => e.kind === 'out').map((e) => e.text).join('\n') + '\n');
           failure = { verdict: r.verdict === 'WA' ? 'WA' : r.verdict === 'TLE' ? 'TLE' : 'RE', stderr: r.events.filter((e) => e.kind === 'err').map((e) => e.text).join('\n'), message: r.message, events: r.events, timeMs: r.timeMs };
@@ -205,15 +217,17 @@ export class StressRun extends EventEmitter {
         if (signal.aborted) break;
         const v = classifyRun(s);
         if (v === 'STOPPED') break;
+        shown = { outputFile: outF, stderr: s.stderr, timeMs: s.timeMs };
         if (v !== 'OK') failure = { verdict: v === 'ERR' ? 'RE' : v, stderr: s.stderr, message: describeExit(s), timeMs: s.timeMs };
       }
       this.completed++;
       if (failure) await this.onFailure(it, failure, inF, ansF, outF);
-      else await this.maybePublish(inF, ansF);
+      else await this.maybePublish(inF, ansF, { iteration: it, ...shown });
     }
   }
 
-  private async maybePublish(inF: string, ansF: string): Promise<void> {
+  /** Every publishIntervalMs, show a passing test (in, ans, sus's output and stderr). */
+  private async maybePublish(inF: string, ansF: string, live: StressLive): Promise<void> {
     const now = performance.now();
     if (this.publishing || this.state !== 'running' || now - this.lastPublish < this.cfg.publishIntervalMs) return;
     this.publishing = true;
@@ -221,7 +235,12 @@ export class StressRun extends EventEmitter {
     try {
       await copyFileP(inF, path.join(this.cfg.dir, 'in'));
       if (this.cfg.mode === 'wa') await copyFileP(ansF, path.join(this.cfg.dir, 'ans'));
-      this.emit('publish');
+      if (live.outputFile) {
+        const out = path.join(this.cfg.scratch, 'live', 'out');
+        await copyFileP(live.outputFile, out);
+        live = { ...live, outputFile: out };
+      }
+      this.emit('publish', live);
     } catch {
       /* the folder may be gone; ignore */
     } finally {

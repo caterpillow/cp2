@@ -18,6 +18,8 @@ export interface CaseResult {
   diff?: DiffInfo;
   transcript?: TranscriptLine[];
   at: number;
+  /** A passing test shown while stress runs (never folds or unfolds the case). */
+  live?: boolean;
 }
 
 export interface CompileState {
@@ -87,6 +89,7 @@ export class Session {
   /** Text box backed by a file (optionally windowed around a line of interest). */
   async fileText(id: string, file: string | null, inlineBytes: number, editable: boolean, focusLine?: number): Promise<TextVM> {
     let e = this.texts.get(id);
+    if (e && (e.file ?? null) !== file) e = undefined;
     if (e && focusLine && e.truncated && (focusLine < e.startLine || focusLine > e.startLine + countLines(e.text) - 1)) e = undefined;
     if (!e) {
       if (!file) e = { rev: nextRev(), text: '', size: 0, truncated: false, startLine: 1 };

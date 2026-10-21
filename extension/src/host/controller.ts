@@ -471,7 +471,7 @@ export class Controller implements vscode.Disposable {
 
   private async resultVM(s: Session, key: string, r: CaseResult): Promise<ResultVM> {
     const inline = this.cfg().inlineBytes;
-    const vm: ResultVM = { verdict: r.verdict, at: r.at, timeMs: r.timeMs, detail: r.detail };
+    const vm: ResultVM = { verdict: r.verdict, at: r.at, live: r.live, timeMs: r.timeMs, detail: r.detail };
     if (r.outFile) vm.received = await s.fileText(`${key}|out`, r.outFile, inline, false, r.diff?.receivedLine);
     if (r.stderr && r.stderr.trim()) vm.stderr = s.memText(`${key}|err`, r.stderr, inline);
     if (r.debugStderr !== undefined) vm.debug = s.memText(`${key}|dbg`, r.debugStderr || '(no output on stderr)', inline);

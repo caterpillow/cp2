@@ -254,6 +254,50 @@ describe('stress', () => {
     h.c.dispose();
     h.integ.dispose();
   });
+
+  it('shows received and stderr as it goes, and stops at once (also while compiling)', async () => {
+    const SUM = (dbg: boolean) => `#include <bits/stdc++.h>\nint main(){int n;std::cin>>n;long long s=0;for(int i=0;i<n;i++){int x;std::cin>>x;s+=x;}${dbg ? 'std::cerr<<"dbg n="<<n<<"\\n";' : ''}std::cout<<s<<"\\n";}\n`;
+    const root = await mkws({ 'cf/y/y.cpp': SUM(true), 'cf/y/ybrute.cpp': SUM(false), 'cf/y/gen.py': 'import random\nn=random.randint(1,6)\nprint(n)\nprint(*[random.randint(1,9) for _ in range(n)])\n' });
+    const h = harness(root);
+    fake.config['cp2.stress.maxIterations'] = 0; // until stopped
+    const file = path.join(root, 'cf/y/y.cpp');
+    await h.c.setActive(file);
+    assert.equal((await h.state()).stress.wa.canRun, true);
+
+    // Stop while it's still compiling: nothing runs afterwards.
+    const first = h.c.stress.onMessage(file, { type: 'stressRun', mode: 'wa' });
+    await sleep(50);
+    await h.c.stress.onMessage(file, { type: 'stressStop', mode: 'wa' });
+    let s = await h.state();
+    assert.equal(s.stress.wa.running, false);
+    assert.equal(s.stress.wa.status?.state, 'stopped');
+    await first;
+    await sleep(300);
+    assert.ok(!fs.existsSync(path.join(root, 'cf/y/in')), 'no test was generated');
+
+    // Live: the in case shows sus's output and stderr for the test on screen.
+    const run = h.c.stress.onMessage(file, { type: 'stressRun', mode: 'wa' });
+    s = await h.waitFor((x) => {
+      const c = x.cases.find((k) => k.key === 'f:in');
+      const r = c?.result;
+      if (!c || !r?.live || !r.received?.text || !r.stderr?.text) return false;
+      const nums = (c.input.text ?? '').trim().split(/\s+/).map(Number);
+      return Number(r.received.text) === nums.slice(1).reduce((a, b) => a + b, 0) && r.stderr.text.trim() === `dbg n=${nums[0]}`;
+    }, 30000);
+    assert.equal(s.cases.find((k) => k.key === 'f:in')!.result!.verdict, 'RUNNING');
+    const t0 = Date.now();
+    await h.c.stress.onMessage(file, { type: 'stressStop', mode: 'wa' });
+    await run;
+    assert.ok(Date.now() - t0 < 1500, `stopping took ${Date.now() - t0} ms`);
+    s = await h.state();
+    assert.equal(s.stress.wa.status?.state, 'stopped');
+    const r = s.cases.find((k) => k.key === 'f:in')!.result!;
+    assert.equal(r.verdict, 'AC', 'the last test shown passed');
+    assert.equal(r.live, true);
+    delete fake.config['cp2.stress.maxIterations'];
+    h.c.dispose();
+    h.integ.dispose();
+  });
 });
 
 describe('integrations', () => {

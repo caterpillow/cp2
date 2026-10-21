@@ -8,7 +8,7 @@ import { isSourceFile } from '../core/lang';
 import { classifyRun, describeExit, runProcess } from '../core/runner';
 import { resolveSnippet, snippetVars } from '../core/snippet';
 import { DirMeta, loadDirMeta, saveDirMeta, SHRINK_STEPS, shrinkIndex } from '../core/store';
-import { StressConfig, StressRun, StressStatus } from '../core/stress';
+import { StressConfig, StressLive, StressRun, StressStatus } from '../core/stress';
 import { autofill, defaultGen, planSetup, Slot } from '../core/stressFiles';
 import type { FromWebview, SlotVM, StressSectionVM, StressStatusVM } from '../../../shared/viewModel';
 import type { Controller } from './controller';
@@ -20,6 +20,8 @@ type Mode = 'wa' | 're';
 interface RunState {
   run: StressRun | null;
   compiling: boolean;
+  /** Stopped while compiling: don't start once the builds finish. */
+  cancelled?: boolean;
   status: StressStatusVM | undefined;
 }
 
@@ -143,9 +145,11 @@ export class StressHost {
       case 'stressRun':
         await this.run(active, m.mode);
         return;
-      case 'stressStop':
-        this.runs.get(this.runKey(dir, m.mode))?.run?.stop();
+      case 'stressStop': {
+        const rs = this.runs.get(this.runKey(dir, m.mode));
+        if (rs) this.stopRun(rs);
         break;
+      }
     }
     this.c.requestRender(0);
   }
@@ -247,7 +251,9 @@ export class StressHost {
     let built: Record<string, Awaited<ReturnType<Controller['build']>>>;
     try {
       built = Object.fromEntries(await Promise.all(jobs));
+      if (rs.cancelled) return;
     } catch (e) {
+      if (rs.cancelled) return;
       rs.compiling = false;
       rs.status = { state: 'error', text: `build failed: ${e}` };
       this.c.requestRender(0);
@@ -300,14 +306,28 @@ export class StressHost {
       rs.status = this.statusVM(x);
       if (this.c.active && path.dirname(this.c.active) === dir) this.c.requestRender(120);
     });
-    run.on('publish', () => {
+    let published = false;
+    run.on('publish', (live: StressLive) => {
+      // `in` / `ans` may have just been created: don't wait for the file watcher to list them.
+      if (!published) this.c.dirs.invalidate(dir);
+      published = true;
       for (const f of [path.join(dir, 'in'), path.join(dir, 'ans')]) this.invalidateFile(dir, f);
+      if (live.outputFile) this.invalidateFile(dir, live.outputFile);
+      this.invalidateText(dir, 'f:in|err');
+      this.caseResults.set(dir, { verdict: 'RUNNING', live: true, timeMs: live.timeMs, detail: `stress run ${live.iteration.toLocaleString('en-US')} · passed`, outFile: live.outputFile, stderr: live.stderr, at: Date.now() });
+      if (this.c.active && path.dirname(this.c.active) === dir) this.c.requestRender(120);
     });
     const final = await run.start();
     rs.run = null;
     rs.status = this.statusVM(final);
     for (const f of [path.join(dir, 'in'), path.join(dir, 'ans')]) this.invalidateFile(dir, f);
     this.c.dirs.invalidate(dir);
+    const live = this.caseResults.get(dir);
+    if (live?.live) {
+      // The last test shown passed; after an error, `in` holds gen's / brute's input instead.
+      if (final.state === 'clean' || final.state === 'stopped') this.caseResults.set(dir, { ...live, verdict: 'AC' });
+      else this.caseResults.delete(dir);
+    }
     if (final.state === 'found' && final.failure) {
       const f = final.failure;
       if (mode === 'wa' && f.answerFile) {
@@ -355,6 +375,10 @@ export class StressHost {
     for (const s of this.c.sessionsIn(dir)) s.invalidateFile(file);
   }
 
+  private invalidateText(dir: string, id: string): void {
+    for (const s of this.c.sessionsIn(dir)) s.invalidateText(id);
+  }
+
   private statusVM(x: StressStatus): StressStatusVM {
     const runs = x.iterations.toLocaleString('en-US');
     const rate = x.rate >= 100 ? `${Math.round(x.rate).toLocaleString('en-US')}/s` : `${x.rate.toFixed(1)}/s`;
@@ -375,7 +399,17 @@ export class StressHost {
     }
   }
 
+  /** Stop at once, including while still compiling. */
+  private stopRun(rs: RunState): void {
+    if (rs.run) rs.run.stop();
+    else if (rs.compiling) {
+      rs.cancelled = true;
+      rs.compiling = false;
+      rs.status = { state: 'stopped', text: 'stopped before it started' };
+    }
+  }
+
   stopAll(): void {
-    for (const r of this.runs.values()) r.run?.stop();
+    for (const r of this.runs.values()) this.stopRun(r);
   }
 }

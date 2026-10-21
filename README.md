@@ -124,7 +124,8 @@ Reload VS Code after installing. The cp2 icon appears in the activity bar.
   The sidebar tells you when importing will re-link the file.
 - **Submit** goes to the problem the file is linked to. It asks first if the last run failed or the file changed since.
 - **Stress testing:** the two sections at the bottom of the sidebar. **Set up** turns `x.cpp` into `x/x.cpp`,
-  `x/xbrute.cpp` and `x/gen.cpp`. Generated tests go to `in` / `ans`. After a failure, cp2 keeps looking for a
+  `x/xbrute.cpp` and `x/gen.cpp`. Generated tests go to `in` / `ans`; while it runs, the `in` case also shows sus's
+  output and stderr on the test on screen. After a failure, cp2 keeps looking for a
   smaller failing test for as long as the **smaller** slider says (default `cp2.stress.shrinkSeconds`, 0.5 s).
 - **Compare modes** live in the ⚙ panel (per file), which floats at the top of the sidebar (Esc closes it). A custom checker is run as `checker <input> <output> <expected>`
   (testlib order), and exit code 0 means accepted.

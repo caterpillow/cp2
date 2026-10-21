@@ -48,6 +48,8 @@ export interface ResultVM {
   verdict: Verdict;
   /** When the result was produced: a new value means a new run finished. */
   at: number;
+  /** A passing test shown while stress runs (never folds or unfolds the case). */
+  live?: boolean;
   timeMs?: number;
   /** Checker / judge message, exit description, ... */
   detail?: string;
