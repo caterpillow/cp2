@@ -197,6 +197,15 @@ export class Integrations implements Extras, vscode.Disposable {
     const b = p.meta.binding;
     const bound = b ? refFromBinding(b) : null;
     const focus = this.state.connected ? this.state.focus.problem : null;
+    if (focus?.anonymous) {
+      // A plain PDF or another page: samples only, nothing to link to.
+      return {
+        label: `Import · ${focus.name}`,
+        title: `Import the samples from ${focus.pdfUrl ?? focus.ref.url} (Ctrl+Shift+I)`,
+        enabled: true,
+        note: bound ? `Linked to ${shortProblemId(bound)}. Importing these samples unlinks this file.` : undefined,
+      };
+    }
     if (focus) {
       // The problem page you touched last in the browser always wins (it can replace a link).
       const id = shortProblemId(focus.ref);
@@ -239,9 +248,9 @@ export class Integrations implements Extras, vscode.Disposable {
     const tests = data.interactive ? [] : data.tests;
     const idx = await this.c.indexFor(p.store);
     const old = p.meta.binding ? refFromBinding(p.meta.binding) : null;
-    const relinked = old && problemKey(old) !== problemKey(data.ref) ? old : null;
+    const relinked = old && (data.anonymous || problemKey(old) !== problemKey(data.ref)) ? old : null;
     if (relinked) {
-      // A different problem now: drop the old link and its verdict.
+      // A different problem now (or none): drop the old link and its verdict.
       if (idx.data.bindings[problemKey(relinked)] === p.store.rel(file)) delete idx.data.bindings[problemKey(relinked)];
       p.meta.verdict = undefined;
       delete idx.data.verdicts[p.store.rel(file)];
@@ -249,6 +258,22 @@ export class Integrations implements Extras, vscode.Disposable {
       p.meta.autoImported = false;
     }
     if (tests.length || !data.note) await p.replaceImported(tests);
+    if (data.anonymous) {
+      // Samples only: the file isn't linked to anything (and keeps no name from a judge).
+      p.meta.binding = undefined;
+      if (relinked) p.meta.name = undefined;
+      await p.flush();
+      idx.save();
+      this.c.requestRender(0);
+      this.updateStatusBar();
+      const msg = tests.length ? `imported ${tests.length} sample${tests.length === 1 ? '' : 's'} from ${data.name} into ${path.basename(file)}${relinked ? ` (unlinked from ${shortProblemId(relinked)})` : ''}` : `no samples found in ${data.name}${data.note ? `: ${data.note}` : ''}`;
+      if (!quiet) {
+        if (!tests.length) void vscode.window.showWarningMessage(`cp2: ${msg}`);
+        else vscode.window.setStatusBarMessage(`cp2: ${msg}`, 5000);
+      }
+      this.c.log(msg);
+      return;
+    }
     p.meta.name = data.name;
     p.meta.binding = bindingFromRef(data.ref);
     if (data.memoryLimitMb) p.meta.memoryLimitMb = data.memoryLimitMb;
@@ -603,6 +628,13 @@ export class Integrations implements Extras, vscode.Disposable {
       this.problemItem.tooltip = 'cp2: the browser extension is not connected';
       if (this.problemItem.text) this.problemItem.show();
       else this.problemItem.hide();
+      return;
+    }
+    if (p.anonymous) {
+      const n = p.name.length > 32 ? p.name.slice(0, 31) + '…' : p.name;
+      this.problemItem.text = `${p.pdfUrl ? '$(file-pdf)' : '$(globe)'} ${n}`;
+      this.problemItem.tooltip = new vscode.MarkdownString(`**${p.name}**\n\n${p.pdfUrl ?? p.ref.url}\n\nNot a judge problem: Import (Ctrl+Shift+I) copies its samples only.`);
+      this.problemItem.show();
       return;
     }
     const name = p.name.replace(/^[A-Za-z0-9]+[.\s-]+\s*/, '');

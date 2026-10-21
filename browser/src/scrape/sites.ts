@@ -129,6 +129,7 @@ export function scrapeGeneric(doc: Document, url: string): ProblemData {
   const body = doc.body;
   const text = body?.textContent ?? '';
   return problem(ref, genericTitle(doc), {
+    anonymous: true,
     tests: genericSamples(body),
     timeLimitMs: parseTimeLimit(text.match(/time limit[^\n]{0,40}/i)?.[0] ?? ''),
     memoryLimitMb: parseMemoryLimit(text.match(/memory limit[^\n]{0,40}/i)?.[0] ?? ''),

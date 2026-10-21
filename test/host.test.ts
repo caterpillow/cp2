@@ -293,6 +293,30 @@ describe('integrations', () => {
     const zidx = (await h.c.indexFor(await h.c.storeFor(z))).data;
     assert.equal(zidx.bindings['codeforces:2261:A'], undefined, 'old link removed');
     assert.equal(zidx.bindings['codeforces:2261:B1'], 'old/z.cpp');
+    // a plain PDF: samples only, and the file is unlinked
+    const pdfFocus = { ref: { site: 'web', contestId: '', taskId: 'file:///tmp/camp.pdf', url: 'file:///tmp/camp.pdf' }, name: 'camp.pdf', tests: [{ input: '9\n', output: '18\n' }], pdfUrl: 'file:///tmp/camp.pdf', anonymous: true, scrapedAt: Date.now() };
+    fake.commands.set('cp2bridge._request', async (op: string, args: any) => (op === 'scrape' && !args?.ref ? pdfFocus : null));
+    await fake.commands.get('cp2._bridgeEvent')!({ type: 'focus', focus: { problem: pdfFocus, contest: contest(true) } });
+    s = await h.state();
+    assert.equal(s.importBtn.label, 'Import · camp.pdf');
+    assert.match(s.importBtn.note ?? '', /unlinks/);
+    assert.match(fake.statusBar['cp2.problem'] ?? '', /camp\.pdf/);
+    await h.integ.doImport(z);
+    s = await h.state();
+    assert.equal(s.submitBtn.enabled, false, 'no longer linked');
+    assert.deepEqual(
+      s.cases.filter((c) => c.origin === 'imported').map((c) => c.input.text),
+      ['9\n'],
+    );
+    fake.commands.set('cp2bridge._request', async (op: string, args: any) => {
+      if (op === 'scrape') return problem(args?.ref?.taskId ?? focusTask, [{ input: '1\n', output: '2\n' }, { input: '2\n', output: '4\n' }]);
+      if (op === 'submit') {
+        submitted.push(args);
+        return { ok: true, message: 'In queue' };
+      }
+      return null;
+    });
+
     // back to A for the rest of the test
     focusTask = 'A';
     await fake.commands.get('cp2._bridgeEvent')!({ type: 'focus', focus: { problem: problem('A', [{ input: '1\n', output: '2\n' }]), contest: contest(true) } });

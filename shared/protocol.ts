@@ -26,6 +26,11 @@ export interface ProblemData {
   ioFiles?: { input: string; output: string };
   /** Why no samples were found (shown in VS Code). */
   note?: string;
+  /**
+   * Not a judge problem (a plain PDF or some other page): only the samples are imported, the file
+   * isn't linked to anything.
+   */
+  anonymous?: boolean;
   scrapedAt: number;
 }
 

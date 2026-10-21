@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import { genericSamples } from '../browser/src/scrape/generic';
 import { analyzePage } from '../browser/src/scrape/page';
 import { parseDmojSubmissions } from '../browser/src/scrape/verdicts';
-import { parseContestUrl, parseProblemUrl, problemKey, shortProblemId } from '../shared/problemId';
+import { parseContestUrl, parseProblemUrl, pdfName, pdfUrlOf, problemKey, shortProblemId } from '../shared/problemId';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { parseHTML } = require('linkedom');
 
@@ -20,6 +20,21 @@ describe('more judges', () => {
     assert.equal(parseProblemUrl('https://orac2.info/problem/1/')?.url, 'https://orac2.info/problem/1/');
     assert.equal(parseContestUrl('https://dmoj.ca/contest/ccc22s')?.contestId, 'ccc22s');
     assert.equal(shortProblemId(parseProblemUrl('https://dmoj.ca/problem/ccc22s1')!), 'DMOJ ccc22s1');
+  });
+
+  it('recognises PDF tabs, including viewer extensions', () => {
+    const acro = 'chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj';
+    assert.equal(pdfUrlOf('https://orac2.info/problem/1/statement.pdf'), 'https://orac2.info/problem/1/statement.pdf');
+    assert.equal(pdfUrlOf(`${acro}/https://static.oj.uz/p/statement_en.pdf`), 'https://static.oj.uz/p/statement_en.pdf');
+    assert.equal(pdfUrlOf(`${acro}/https:/example.com/a.pdf`), 'https://example.com/a.pdf');
+    assert.equal(pdfUrlOf(`${acro}/file:///C:/Users/me/Downloads/camp%20day1.pdf`), 'file:///C:/Users/me/Downloads/camp%20day1.pdf');
+    assert.equal(pdfUrlOf(`${acro}/viewer.html?pdfurl=https%3A%2F%2Fexample.com%2Fq.pdf`), 'https://example.com/q.pdf');
+    assert.equal(pdfUrlOf(`${acro}/https%3A%2F%2Fexample.com%2Fq.pdf`), 'https://example.com/q.pdf');
+    assert.equal(pdfUrlOf('file:///home/me/statement.pdf'), 'file:///home/me/statement.pdf');
+    assert.equal(pdfUrlOf('https://qoj.ac/download.php?type=statement&id=7'), 'https://qoj.ac/download.php?type=statement&id=7');
+    assert.equal(pdfUrlOf(`${acro}/options.html`), null);
+    assert.equal(pdfUrlOf('https://codeforces.com/contest/1/problem/A'), null);
+    assert.equal(pdfName('file:///C:/Users/me/Downloads/camp%20day1.pdf'), 'camp day1.pdf');
   });
 
   it('DMOJ problem: limits and "Output for Sample Input" samples', () => {

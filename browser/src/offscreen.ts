@@ -7,17 +7,29 @@ import { samplesFromPdf } from './scrape/pdf';
 
 pdfjs.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdf.worker.mjs');
 
-function fromBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+/** XHR (unlike fetch) can read file:// URLs once "Allow access to file URLs" is on for cp2. */
+function load(url: string): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('GET', url);
+    x.responseType = 'arraybuffer';
+    x.withCredentials = true;
+    x.onload = () => {
+      if ((x.status === 200 || (x.status === 0 && x.response)) && x.response) resolve(new Uint8Array(x.response));
+      else reject(new Error(`couldn't download the PDF (HTTP ${x.status})`));
+    };
+    x.onerror = () =>
+      reject(new Error(url.startsWith('file:') ? 'cp2 may not read local files yet: turn on "Allow access to file URLs" for cp2 on the browser\'s extensions page' : "couldn't download the PDF"));
+    x.send();
+  });
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.target !== 'offscreen') return false;
   if (msg.type === 'pdf') {
-    samplesFromPdf(pdfjs as any, fromBase64(msg.data)).then(
+    load(msg.url)
+      .then((data) => samplesFromPdf(pdfjs as any, data))
+      .then(
       (tests) => reply({ ok: true, tests }),
       (e) => reply({ ok: false, error: String(e?.message ?? e) }),
     );

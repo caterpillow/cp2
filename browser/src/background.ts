@@ -6,7 +6,7 @@
 // - follows verdicts after a submit
 // - toolbar icon: send the current problem straight into the active file in VS Code
 
-import { contestKey, mySubmissionsUrl, parseContestUrl, parseProblemUrl, ProblemRef, problemKey, Site, submitPageUrl, webRef } from '../../shared/problemId';
+import { contestKey, mySubmissionsUrl, parseContestUrl, parseProblemUrl, pdfName, pdfUrlOf, ProblemRef, problemKey, Site, submitPageUrl, webRef } from '../../shared/problemId';
 import { BridgeToBrowser, BrowserToBridge, ContestInfo, ContestTask, DEFAULT_BRIDGE_PORT, FocusState, ProblemData, PROTOCOL_VERSION, SampleTest, SubmitArgs, SubmitResult, VerdictUpdate } from '../../shared/protocol';
 import { tasksFromStandingsJson } from './scrape/atcoder';
 import type { PageInfo } from './scrape/page';
@@ -136,7 +136,7 @@ async function onInteract(tabId: number, info: PageInfo): Promise<void> {
     s.lastProblem = { tabId, data: info.problem, at: Date.now() };
     const visited = s.visited ?? {};
     const key = problemKey(info.problem.ref);
-    if (visited[tabId] !== key) {
+    if (visited[tabId] !== key && !info.problem.anonymous) {
       visited[tabId] = key;
       s.visited = visited;
       send({ type: 'visit', problem: info.problem });
@@ -154,32 +154,55 @@ async function onInteract(tabId: number, info: PageInfo): Promise<void> {
 
 async function pageInfoOf(tabId: number): Promise<PageInfo | null> {
   try {
-    return (await chrome.tabs.sendMessage(tabId, { type: 'pageInfo' })) as PageInfo;
+    return ((await chrome.tabs.sendMessage(tabId, { type: 'pageInfo' }, { frameId: 0 })) as PageInfo) ?? null;
   } catch {
     return null;
   }
+}
+
+/** A tab showing a PDF (browser viewer or a viewer extension like Adobe's): an anonymous problem. */
+function pdfProblem(url: string | undefined): ProblemData | null {
+  const pdf = url ? pdfUrlOf(url) : null;
+  if (!pdf) return null;
+  return { ref: webRef(pdf), name: pdfName(pdf), tests: [], pdfUrl: pdf, anonymous: true, scrapedAt: Date.now() };
+}
+
+/** Tab switched to / finished loading: judge pages answer for themselves, PDFs are recognised by URL. */
+async function trackTab(tabId: number): Promise<void> {
+  const info = await pageInfoOf(tabId);
+  if (info && info.kind !== 'other') return onInteract(tabId, info);
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return;
+  }
+  const pdf = pdfProblem(tab.url);
+  if (pdf) await onInteract(tabId, { kind: 'problem', site: 'web', url: tab.url ?? '', problem: pdf, contest: null });
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg?.target === 'offscreen') return false;
   const tabId = sender.tab?.id;
   if (msg?.type === 'interact' && tabId !== undefined) void onInteract(tabId, msg.info as PageInfo);
+  else if (msg?.type === 'interactFrame' && tabId !== undefined) void trackTab(tabId);
   else if (msg?.type === 'verdicts' && tabId !== undefined) void onRows(tabId, msg.rows as VerdictRow[], false);
   reply(undefined);
   return false;
 });
 
-chrome.tabs.onActivated.addListener(({ tabId }) => {
-  void pageInfoOf(tabId).then((i) => i && onInteract(tabId, i));
-});
+chrome.tabs.onActivated.addListener(({ tabId }) => void trackTab(tabId));
 
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId < 0) return;
-  void chrome.tabs.query({ active: true, windowId }).then(async ([t]) => {
-    if (t?.id === undefined) return;
-    const i = await pageInfoOf(t.id);
-    if (i) await onInteract(t.id, i);
+  void chrome.tabs.query({ active: true, windowId }).then(([t]) => {
+    if (t?.id !== undefined) void trackTab(t.id);
   });
+});
+
+// PDF tabs have no content script, so loading one in the foreground counts as using it.
+chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.status === 'complete' && tab.active && pdfUrlOf(tab.url ?? '')) void trackTab(tabId);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -232,7 +255,7 @@ async function findProblemTab(ref: ProblemRef): Promise<chrome.tabs.Tab | null> 
 
 async function scrapeTab(tabId: number, ref?: ProblemRef): Promise<ProblemData | null> {
   try {
-    return (await chrome.tabs.sendMessage(tabId, { type: 'scrape', index: ref?.site === 'codeforces' ? ref.taskId : undefined })) as ProblemData | null;
+    return (await chrome.tabs.sendMessage(tabId, { type: 'scrape', index: ref?.site === 'codeforces' ? ref.taskId : undefined }, { frameId: 0 })) as ProblemData | null;
   } catch {
     return null;
   }
@@ -263,20 +286,11 @@ async function fetchText(url: string): Promise<string> {
   return r.text();
 }
 
-function toBase64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(bin);
-}
-
-/** Samples from a PDF statement (pdf.js runs in the offscreen document). */
+/** Samples from a PDF statement. The offscreen document downloads (also file:// URLs) and parses it. */
 async function pdfSamples(url: string): Promise<SampleTest[]> {
-  const r = await fetch(url, { credentials: 'include' });
-  if (!r.ok) throw new Error(`couldn't download the PDF statement (HTTP ${r.status})`);
   await ensureOffscreen();
-  const res = (await chrome.runtime.sendMessage({ target: 'offscreen', type: 'pdf', data: toBase64(await r.arrayBuffer()) })) as { ok: boolean; tests?: SampleTest[]; error?: string };
-  if (!res?.ok) throw new Error(`couldn't read the PDF: ${res?.error ?? 'unknown error'}`);
+  const res = (await chrome.runtime.sendMessage({ target: 'offscreen', type: 'pdf', url })) as { ok: boolean; tests?: SampleTest[]; error?: string };
+  if (!res?.ok) throw new Error(res?.error ?? "couldn't read the PDF");
   return res.tests ?? [];
 }
 
@@ -304,9 +318,8 @@ async function scrape(ref?: ProblemRef): Promise<ProblemData | null> {
     const d = await scrapeTab(tab.id, ref);
     if (d) return withPdf(d);
   }
-  if (ref.site === 'web' && /\.pdf($|[?#])/i.test(ref.url)) {
-    return { ref, name: decodeURIComponent(ref.url.split('/').pop() ?? 'statement.pdf'), tests: await pdfSamples(ref.url), scrapedAt: Date.now() };
-  }
+  const pdf = ref.site === 'web' ? pdfProblem(ref.url) : null;
+  if (pdf) return withPdf(pdf);
   const html = await fetchText(ref.url);
   const info = await parseRemote<PageInfo>('page', html, ref.url, { index: ref.site === 'codeforces' ? ref.taskId : undefined, generic: ref.site === 'web' });
   if (!info?.problem) throw new Error(`couldn't read the problem page (open ${ref.url} in a tab and try again)`);
@@ -665,10 +678,8 @@ function onAck(requestId: string, ok: boolean, message: string): void {
 
 /** Toolbar icon on a page that isn't a known judge: PDFs directly, anything else heuristically. */
 async function iconScrape(tab: chrome.tabs.Tab): Promise<ProblemData | null> {
-  const url = tab.url ?? '';
-  if (/\.pdf($|[?#])/i.test(url)) {
-    return { ref: webRef(url), name: decodeURIComponent(url.split(/[?#]/)[0].split('/').pop() ?? 'statement.pdf'), tests: await pdfSamples(url), scrapedAt: Date.now() };
-  }
+  const pdf = pdfProblem(tab.url);
+  if (pdf) return pdf;
   // activeTab lets us inject into the page the icon was clicked on.
   await chrome.scripting.executeScript({ target: { tabId: tab.id! }, files: ['content.js'] });
   return (await chrome.tabs.sendMessage(tab.id!, { type: 'scrape', generic: true })) as ProblemData | null;

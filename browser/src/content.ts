@@ -1,6 +1,6 @@
-// Runs on Codeforces / AtCoder pages: reports interactions (so the background knows which
-// problem/contest page is the most recent one), answers scrape requests, and watches
-// "my submissions" pages for verdicts.
+// Runs on judge pages: reports interactions (so the background knows which problem/contest page
+// is the most recent one), answers scrape requests, and watches "my submissions" pages for
+// verdicts. In iframes (e.g. oj.uz's PDF viewer) it only reports interactions to its tab.
 
 import { analyzePage, PageInfo, submissionRows } from './scrape/page';
 
@@ -19,8 +19,35 @@ const alive = () => {
   }
 };
 
-// A copy left behind by a reloaded extension can't talk to it anymore: let this one take over.
-if (!window.__cp2Alive?.()) {
+const inFrame = (() => {
+  try {
+    return window.top !== window;
+  } catch {
+    return true;
+  }
+})();
+
+const INTERACT_EVENTS = ['pointerdown', 'keydown', 'wheel', 'scroll'] as const;
+
+if (inFrame) {
+  // Statements shown in an iframe (pdf.js viewers etc.): scrolling happens in here, not in the
+  // page, so tell the background the tab was used; it reads the page itself from the top frame.
+  if (!window.__cp2Alive?.()) {
+    window.__cp2Alive = alive;
+    let last = 0;
+    const ping = () => {
+      if (!alive() || Date.now() - last < 800) return;
+      last = Date.now();
+      try {
+        chrome.runtime.sendMessage({ type: 'interactFrame' }).catch(() => undefined);
+      } catch {
+        /* extension reloaded */
+      }
+    };
+    for (const ev of INTERACT_EVENTS) window.addEventListener(ev, ping, { capture: true, passive: true });
+  }
+} else if (!window.__cp2Alive?.()) {
+  // A copy left behind by a reloaded extension can't talk to it anymore: let this one take over.
   window.__cp2Alive = alive;
   let lastY = window.innerHeight / 2;
   let lastSent = 0;
@@ -49,6 +76,34 @@ if (!window.__cp2Alive?.()) {
   window.addEventListener('wheel', () => ((lastY = window.innerHeight / 2), notify()), { capture: true, passive: true });
   window.addEventListener('scroll', () => ((lastY = window.innerHeight / 2), notify()), { capture: true, passive: true });
   window.addEventListener('focus', () => notify());
+  // Statements embedded as PDFs (ORAC, QOJ) swallow every pointer, wheel and key event: the
+  // browser's PDF viewer can't be scripted and the page isn't told when the pointer enters it.
+  // So: clicking into it moves focus there (window blur, activeElement = the frame), and moving
+  // into it shows up as the pointer going quiet right at the frame's edge.
+  const isFrame = (el: Element | null) => !!el && /^(IFRAME|EMBED|OBJECT|FRAME)$/.test(el.tagName);
+  document.addEventListener('pointerover', (e) => isFrame(e.target as Element) && notify(), { capture: true, passive: true });
+  window.addEventListener('blur', () => setTimeout(() => isFrame(document.activeElement) && notify(), 0));
+  let lastPos: { x: number; y: number } | null = null;
+  let quiet: number | undefined;
+  document.addEventListener(
+    'pointermove',
+    (e) => {
+      lastPos = { x: e.clientX, y: e.clientY };
+      if (quiet) clearTimeout(quiet);
+      quiet = window.setTimeout(() => {
+        const p = lastPos;
+        if (!p) return;
+        for (const f of Array.from(document.querySelectorAll('iframe, embed, object'))) {
+          const r = f.getBoundingClientRect();
+          if (r.width < 200 || r.height < 200) continue; // ads and widgets
+          const dx = Math.max(r.left - p.x, 0, p.x - r.right);
+          const dy = Math.max(r.top - p.y, 0, p.y - r.bottom);
+          if (Math.hypot(dx, dy) <= 120) return notify();
+        }
+      }, 300);
+    },
+    { capture: true, passive: true },
+  );
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') notify();
   });

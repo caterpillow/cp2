@@ -231,3 +231,36 @@ export function mySubmissionsUrl(ref: ProblemRef): string {
       return `https://codeforces.com/contest/${ref.contestId}/my`;
   }
 }
+
+/**
+ * The PDF a tab is showing, or null. Handles plain PDF URLs (the browser's own viewer keeps the
+ * original URL) and PDF-viewer extensions that put the original URL after their own, e.g.
+ * Adobe Acrobat's `chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://host/x.pdf` or
+ * `…/viewer.html?pdfurl=https%3A%2F%2Fhost%2Fx.pdf`.
+ */
+export function pdfUrlOf(url: string): string | null {
+  const ext = url.match(/^(?:chrome|moz|edge|safari-web)-extension:\/\/[^/]+\/(.*)$/i);
+  if (ext) {
+    let inner = ext[1];
+    if (/^(https?|file)%3A/i.test(inner)) inner = decodeURIComponent(inner);
+    if (/^(https?|file):/i.test(inner)) return inner.replace(/^(https?|file):\/*(?=[^/])/i, (m, s) => (s.toLowerCase() === 'file' ? 'file:///' : `${s}://`));
+    const u = safeUrl(url);
+    const p = u ? (u.searchParams.get('pdfurl') ?? u.searchParams.get('file') ?? u.searchParams.get('src') ?? u.searchParams.get('url')) : null;
+    return p && /^(https?|file):/i.test(p) ? p : null;
+  }
+  const u = safeUrl(url);
+  if (!u || !/^(https?|file):$/.test(u.protocol)) return null;
+  if (/\.pdf$/i.test(u.pathname) || u.searchParams.get('type') === 'statement') return url;
+  return null;
+}
+
+/** "statement.pdf" from a PDF URL. */
+export function pdfName(url: string): string {
+  const u = safeUrl(url);
+  const last = (u?.pathname ?? url).split('/').filter(Boolean).pop() ?? 'statement.pdf';
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}

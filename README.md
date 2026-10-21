@@ -24,7 +24,17 @@ sends problems from the judge to VS Code. Inspired by [CPH](https://github.com/a
 | DMOJ | ✓ | ✓ | ✓ |
 | QOJ | ✓ (HTML or PDF statements) | ✓ | – |
 | oj.uz, ORAC | ✓ (from the PDF statement) | – | – |
-| Any other page or PDF | ✓ via the toolbar icon (best effort) | – | – |
+| A PDF open in a tab (browser viewer or Adobe Acrobat's extension) | ✓ samples only, file not linked | – | – |
+| Any other page | ✓ via the toolbar icon (best effort) | – | – |
+
+PDFs and other pages that aren't judge problems are imported **anonymously**: only the samples are copied, and
+the file isn't linked to anything, so Submit stays off. A tab showing a PDF becomes the "current problem" when you
+switch to it or it finishes loading. For local files (`file:///…`), turn on **Allow access to file URLs** for cp2
+on the browser's extensions page. The extension asks for access to all sites so it can download PDFs from wherever
+they're hosted. It only does that when you import.
+
+Statements embedded as PDFs (ORAC, QOJ) swallow every scroll and click, so the page can't see them. cp2 counts
+clicking into the statement, or moving the pointer into it, as using the page.
 
 PDF statements are read with pdf.js. Samples are found when the statement has the usual "Sample Input 1 / Sample
 Output 1" blocks, side by side or one above the other, as in JOI, AIO, ICPC and most olympiad PDFs. IOI-style function-call
