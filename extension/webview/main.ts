@@ -322,7 +322,11 @@ class Card {
       dragKey = null;
       clearDropMarks();
     });
-    for (const el of [chev, this.label]) el.addEventListener('click', () => this.setCollapsed(!collapsed.has(this.ck)));
+    // Anywhere on the bar folds / unfolds, except the drag handle and the buttons.
+    this.head.addEventListener('click', (e) => {
+      if ((e.target as Element).closest('.grip, button, a, input, select')) return;
+      this.setCollapsed(!collapsed.has(this.ck));
+    });
   }
 
   private get ck(): string {

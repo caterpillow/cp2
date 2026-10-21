@@ -400,6 +400,8 @@ label.check {
   gap: 5px;
   padding: 2px 4px 2px 2px;
   min-height: 24px;
+  cursor: pointer;
+  user-select: none;
 }
 .grip {
   cursor: grab;
