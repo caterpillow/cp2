@@ -107,6 +107,72 @@ describe('checkers and judges', () => {
   });
 });
 
+describe('precompiled headers', () => {
+  const waitFor = async (f: () => Promise<boolean>, ms = 30000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) if (await f()) return;
+    throw new Error(`timed out: ${f}`);
+  };
+  const has = (f: string) => fsp.access(f).then(() => true, () => false);
+  const prog = (n: number) => `#include <cstdio>\nint main(){printf("%d\\n",${n});}\n`;
+
+  it('parallel compiles build each header once, and a broken one is dropped and rebuilt', async () => {
+    const dir = await tmpdir();
+    const pchRoot = path.join(dir, 'pch');
+    const logs: string[] = [];
+    const make = () => new Compiler({ buildRoot: path.join(dir, 'build'), pchRoot, pchEnabled: true, pchHeaders: ['cstdio'], stackMb: 1024, log: (m) => logs.push(m) });
+    const build = async (c: Compiler, n: number) => {
+      const src = path.join(dir, `p${n}.cpp`);
+      await fsp.writeFile(src, prog(n));
+      return c.build({ main: src, extra: [], compiler: 'g++', flags: '-O1' });
+    };
+    const c = make();
+    const first = await Promise.all([1, 2, 3].map((n) => build(c, n)));
+    assert.ok(first.every((b) => b.ok));
+    await waitFor(async () => (await fsp.readdir(pchRoot).catch(() => [])).length === 1 && has(path.join(pchRoot, (await fsp.readdir(pchRoot))[0], 'ok')));
+    const key = (await fsp.readdir(pchRoot))[0];
+    const gch = path.join(pchRoot, key, 'cstdio.gch');
+    assert.equal(logs.filter((l) => /precompiled <cstdio>/.test(l)).length, 1, logs.join('\n'));
+    assert.equal(await has(path.join(pchRoot, key, 'bad')), false);
+    const withPch = await build(c, 4);
+    assert.ok(withPch.ok && withPch.pch, withPch.output);
+
+    // Corrupt it the way the old race did: cut it short, and leave both markers behind.
+    const size = (await fsp.stat(gch)).size;
+    await fsp.truncate(gch, Math.floor(size / 2));
+    const broken = await build(c, 5);
+    assert.ok(broken.ok, broken.output);
+    assert.equal(broken.pch, false);
+    assert.ok(logs.some((l) => /broken/.test(l)), logs.join('\n'));
+    assert.equal(await has(gch), false, 'dropped');
+    assert.ok((await build(c, 6)).ok); // starts the rebuild
+    await waitFor(() => has(path.join(pchRoot, key, 'ok')));
+    assert.ok((await build(c, 7)).pch, 'rebuilt');
+
+    await fsp.truncate(gch, Math.floor(size / 2));
+    await fsp.writeFile(path.join(pchRoot, key, 'bad'), 'rename failed\n');
+    const fresh = make();
+    const b8 = await build(fresh, 8);
+    assert.ok(b8.ok && !b8.pch, b8.output);
+    await waitFor(() => has(path.join(pchRoot, key, 'ok')));
+    assert.equal(await has(path.join(pchRoot, key, 'bad')), false, 'leftover from the race is cleared');
+    assert.ok((await build(fresh, 9)).pch);
+  });
+
+  it('a failed compile caused by a broken header is not cached', async () => {
+    const dir = await tmpdir();
+    const src = path.join(dir, 'a.cpp');
+    await fsp.writeFile(src, prog(1));
+    const c = new Compiler({ buildRoot: path.join(dir, 'build'), pchRoot: path.join(dir, 'pch'), pchEnabled: false, pchHeaders: [], stackMb: 1024 });
+    const spec = { main: src, extra: [], compiler: 'g++', flags: '-O1' };
+    const b = await c.build(spec);
+    const meta = path.join(dir, 'build', (await fsp.readdir(path.join(dir, 'build'))).find((n) => n !== 'obj')!, 'meta.json');
+    const m = JSON.parse(await fsp.readFile(meta, 'utf8'));
+    await fsp.writeFile(meta, JSON.stringify({ ...m, ok: false, output: 'a.cpp:1: fatal error: cannot read PCH file: No such file or directory' }));
+    const again = await new Compiler({ buildRoot: path.join(dir, 'build'), pchRoot: path.join(dir, 'pch'), pchEnabled: false, pchHeaders: [], stackMb: 1024 }).build(spec);
+    assert.ok(b.ok && again.ok && !again.cached, again.output);
+  });
+});
+
 describe('sanitizer fallback', () => {
   it('drops sanitizers the compiler cannot link and still builds', async () => {
     const dir = await tmpdir();

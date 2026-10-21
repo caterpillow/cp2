@@ -50,6 +50,8 @@ interface ToolInfo {
 }
 
 const HAS_SANITIZER = /(^|\s)-fsanitize=/;
+/** gcc rejecting a precompiled header outright (a corrupt .gch, or gcc unable to map it). */
+const PCH_BROKEN = /fatal error: .*\bPCH\b/i;
 const SANITIZER_MISSING = /cannot find -l(asan|ubsan|lsan|tsan)|library not found for -l(asan|ubsan|lsan|tsan)|unsupported option '?-fsanitize|-fsanitize=\S+'? (is )?not supported|unrecognized command[- ]line option '?-fsanitize|sanitizer\S* (is )?not supported|libasan\S* not found|ld: library '(clang_rt\.)?(asan|ubsan)/i;
 
 interface CacheMeta {
@@ -236,18 +238,26 @@ export class Compiler {
     const exe = path.join(outDir, exeName('prog'));
     const metaFile = path.join(outDir, 'meta.json');
     const cached = await readJson<CacheMeta>(metaFile);
-    if (cached && (await this.depsFresh(cached.deps)) && (!cached.ok || (await exists(exe)))) {
+    if (cached && !PCH_BROKEN.test(cached.output) && (await this.depsFresh(cached.deps)) && (!cached.ok || (await exists(exe)))) {
       void fsp.utimes(metaFile, new Date(), new Date()).catch(() => undefined);
       return { ok: cached.ok, cmd: cached.ok ? [exe] : [], output: cached.output, cached: true, timeMs: Date.now() - t0, pch: cached.pch, lang };
     }
     await mkdirp(outDir);
     const cwd = path.dirname(spec.main);
-    const pchArgs = async (src: Buffer): Promise<{ args: string[]; used: boolean }> => {
-      if (!this.opts.pchEnabled || lang !== 'cpp' || tool.clang) return { args: [], used: false };
+    const pchDir = async (src: Buffer): Promise<string | null> => {
+      if (!this.opts.pchEnabled || lang !== 'cpp' || tool.clang) return null;
       const header = pchCandidate(src.toString('utf8'), this.opts.pchHeaders);
-      if (!header) return { args: [], used: false };
-      const inc = await this.pch.locate(spec.compiler, flags, header, tool, cwd);
-      return inc ? { args: [`-I${inc}`, '-Winvalid-pch'], used: true } : { args: [], used: false };
+      return header ? this.pch.locate(spec.compiler, flags, header, tool, cwd) : null;
+    };
+    /** Compiles one unit with the precompiled header if there is one; a broken one is dropped and the unit recompiled without it. */
+    const compileUnit = async (src: Buffer, args: string[]): Promise<{ r: ExecResult; usedPch: boolean }> => {
+      const inc = await pchDir(src);
+      if (!inc) return { r: await exec(spec.compiler, args, cwd), usedPch: false };
+      const r = await exec(spec.compiler, [`-I${inc}`, '-Winvalid-pch', ...args], cwd);
+      if (r.code === 0 || !PCH_BROKEN.test(r.out)) return { r, usedPch: true };
+      this.opts.log?.(`cp2: the precompiled header in ${inc} is broken (${r.out.split('\n')[0]}); compiling without it`);
+      await this.pch.discard(inc);
+      return { r: await exec(spec.compiler, args, cwd), usedPch: false };
     };
     const common = ['-fdiagnostics-color=never'];
     let output = '';
@@ -257,10 +267,9 @@ export class Compiler {
     const tmpExe = `${exe}.tmp${process.pid}`;
 
     if (sources.length === 1) {
-      const pch = await pchArgs(contents[0]);
-      usedPch = pch.used;
       const depFile = path.join(outDir, 'deps.d');
-      const r = await exec(spec.compiler, [...pch.args, ...flags, ...common, '-MD', '-MF', depFile, '-o', tmpExe, path.relative(cwd, spec.main)], cwd);
+      const { r, usedPch: u } = await compileUnit(contents[0], [...flags, ...common, '-MD', '-MF', depFile, '-o', tmpExe, path.relative(cwd, spec.main)]);
+      usedPch = u;
       output = r.error ? `failed to run ${spec.compiler}: ${r.error}` : r.out;
       ok = r.code === 0;
       const d = await fsp.readFile(depFile, 'utf8').catch(() => '');
@@ -281,10 +290,9 @@ export class Compiler {
           continue;
         }
         await mkdirp(objDir);
-        const pch = await pchArgs(contents[i]);
-        if (i === 0) usedPch = pch.used;
         const depFile = path.join(objDir, 'deps.d');
-        const r = await exec(spec.compiler, [...pch.args, ...flags, ...common, '-MD', '-MF', depFile, '-c', '-o', obj, path.relative(cwd, src)], cwd);
+        const { r, usedPch: u } = await compileUnit(contents[i], [...flags, ...common, '-MD', '-MF', depFile, '-c', '-o', obj, path.relative(cwd, src)]);
+        if (i === 0) usedPch = u;
         output += r.error ? `failed to run ${spec.compiler}: ${r.error}\n` : r.out;
         if (r.code !== 0) {
           ok = false;
@@ -293,7 +301,7 @@ export class Compiler {
         const d = await fsp.readFile(depFile, 'utf8').catch(() => '');
         const ds = parseDepFile(d).map((x) => path.resolve(cwd, x));
         ds.forEach((x) => deps.add(x));
-        await atomicWrite(path.join(objDir, 'meta.json'), JSON.stringify({ ok: true, output: '', deps: await this.stamp(ds), pch: pch.used }));
+        await atomicWrite(path.join(objDir, 'meta.json'), JSON.stringify({ ok: true, output: '', deps: await this.stamp(ds), pch: u }));
         objs.push(obj);
       }
       if (ok) {
@@ -351,6 +359,9 @@ export class Compiler {
 /** Builds bits/stdc++.h-style precompiled headers per (compiler, flags) in the background. */
 class PchManager {
   private state = new Map<string, 'building' | 'ready' | 'bad'>();
+  /** First look at a key's folder, shared by everyone asking at the same time. */
+  private probes = new Map<string, Promise<string | null>>();
+  private discards = new Map<string, number>();
 
   constructor(
     private root: string,
@@ -358,27 +369,56 @@ class PchManager {
   ) {}
 
   /** Include dir holding the .gch when ready; otherwise starts building it and returns null. */
-  async locate(compiler: string, flags: string[], header: string, tool: ToolInfo, cwd: string): Promise<string | null> {
+  locate(compiler: string, flags: string[], header: string, tool: ToolInfo, cwd: string): Promise<string | null> {
     const pchFlags = flags.filter((f) => !/^-(MD|MMD|MF|MT|c|o)$/.test(f));
     const key = sha1(JSON.stringify({ compiler, v: tool.version, m: tool.machine, f: pchFlags, h: header })).slice(0, 20);
     const dir = path.join(this.root, key);
     const st = this.state.get(key);
     if (st === 'ready') {
       void fsp.utimes(path.join(dir, 'ok'), new Date(), new Date()).catch(() => undefined);
-      return dir;
+      return Promise.resolve(dir);
     }
-    if (st === 'building' || st === 'bad') return null;
-    if (await exists(path.join(dir, 'ok'))) {
+    if (st === 'building' || st === 'bad') return Promise.resolve(null);
+    // Parallel compiles (stress builds sus, brute and gen at once) must not each start a build.
+    let p = this.probes.get(key);
+    if (!p) {
+      p = this.probe(key, dir, compiler, pchFlags, header, cwd).finally(() => this.probes.delete(key));
+      this.probes.set(key, p);
+    }
+    return p;
+  }
+
+  private async probe(key: string, dir: string, compiler: string, flags: string[], header: string, cwd: string): Promise<string | null> {
+    const [ok, bad] = await Promise.all([exists(path.join(dir, 'ok')), exists(path.join(dir, 'bad'))]);
+    if (ok && !bad) {
       this.state.set(key, 'ready');
       return dir;
     }
-    if (await exists(path.join(dir, 'bad'))) {
+    if (bad && !ok) {
       this.state.set(key, 'bad');
       return null;
     }
+    // Both markers: two builds raced (cp2 before 0.2.4) and the .gch may be corrupt. Start over.
+    if (ok && bad) await fsp.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     this.state.set(key, 'building');
-    void this.build(key, dir, compiler, pchFlags, header, cwd);
+    void this.build(key, dir, compiler, flags, header, cwd);
     return null;
+  }
+
+  /** gcc couldn't use the .gch in `dir`: delete it so it's rebuilt, or give up on it if that already happened. */
+  async discard(dir: string): Promise<void> {
+    const key = path.basename(dir);
+    const n = (this.discards.get(key) ?? 0) + 1;
+    this.discards.set(key, n);
+    if (this.state.get(key) !== 'ready') return; // already discarded by a parallel compile
+    this.state.delete(key);
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    if (n >= 2) {
+      this.state.set(key, 'bad');
+      await mkdirp(dir).catch(() => undefined);
+      await atomicWrite(path.join(dir, 'bad'), 'gcc could not read the rebuilt precompiled header either\n').catch(() => undefined);
+      this.log?.('cp2: giving up on that precompiled header (Clear Build Cache to try again)');
+    }
   }
 
   private async build(key: string, dir: string, compiler: string, flags: string[], header: string, cwd: string): Promise<void> {
@@ -390,7 +430,7 @@ class PchManager {
       const real = deps.find((d) => d.replace(/\\/g, '/').endsWith(header));
       if (m.code !== 0 || !real) throw new Error(`could not locate <${header}>: ${m.out.slice(0, 300)}`);
       const gch = path.join(dir, `${header}.gch`);
-      const tmp = `${gch}.tmp${process.pid}`;
+      const tmp = `${gch}.tmp${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
       const r = await exec(compiler, [...flags, '-fdiagnostics-color=never', '-x', 'c++-header', real, '-o', tmp], cwd, undefined, 300000);
       if (r.code !== 0) throw new Error(r.out.slice(0, 500));
       await fsp.rename(tmp, gch);
